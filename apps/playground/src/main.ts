@@ -7,6 +7,11 @@ import {
   createBasicLighting,
   OrbitCameraController,
   loadGLTF,
+  initPhysics,
+  RigidBody,
+  RigidBodyType,
+  BoxCollider,
+  Physics,
 } from "@engine/core";
 import { RotateOverTime } from "./RotateOverTime.js";
 
@@ -35,16 +40,56 @@ async function main(): Promise<void> {
     0.1,
     100
   );
-  camera.position.set(0, 1.5, 4);
+  camera.position.set(3, 2.5, 7);
 
   const cameraController = new OrbitCameraController(camera, renderer.domElement);
-  cameraController.setTarget(0, 0.5, 0);
+  cameraController.setTarget(1, 0.3, 0);
 
   attachAutoResize(renderer, camera);
 
   // ---- Illuminazione base ---------------------------------------------
   const lighting = createBasicLighting();
   scene.add(lighting.ambient._object3D, lighting.keyLight._object3D);
+
+  // ---- Fisica (Fase 3) ------------------------------------------------
+  // await PRIMA di engine.start(), stesso motivo/pattern di createRenderer
+  // sopra: se RigidBody/Collider venissero aggiunti (o l'Engine iniziasse
+  // a ticchettare) prima che il WASM di Rapier sia pronto, Physics.step()
+  // fallirebbe rumorosamente (vedi il commento su initPhysics in
+  // packages/core/src/physics/Physics.ts).
+  await initPhysics();
+
+  // Piano: solo un Collider, senza RigidBody — diventa un collider Rapier
+  // "standalone" implicitamente statico (vedi Collider.ts). Non ha bisogno
+  // di muoversi, quindi non serve un RigidBody di tipo Fixed per questo.
+  const groundGO = new GameObject("PhysicsGround");
+  groundGO.transform.setPosition(0, -1, 0);
+  const groundMesh = new THREE.Mesh(
+    new THREE.BoxGeometry(20, 0.4, 20),
+    new THREE.MeshStandardMaterial({ color: 0x3a3f36 })
+  );
+  groundGO._object3D.add(groundMesh);
+  scene.add(groundGO._object3D);
+  const groundCollider = groundGO.addComponent(BoxCollider);
+  groundCollider.size = { x: 20, y: 0.4, z: 20 };
+
+  // Cubo: RigidBody dynamic + BoxCollider con restitution > 0 per il
+  // rimbalzo — deliverable della fase ("un cubo che cade per gravità e
+  // rimbalza su un piano"). Spostato a x=2 per non sovrapporsi visivamente
+  // al modello/cubo di fallback della Fase 2, che resta all'origine.
+  const physicsCubeGO = new GameObject("PhysicsCube");
+  physicsCubeGO.transform.setPosition(2, 4, 0);
+  const physicsCubeMesh = new THREE.Mesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshStandardMaterial({ color: 0xe0663f })
+  );
+  physicsCubeGO._object3D.add(physicsCubeMesh);
+  scene.add(physicsCubeGO._object3D);
+  const physicsCubeBody = physicsCubeGO.addComponent(RigidBody);
+  physicsCubeBody.type = RigidBodyType.Dynamic;
+  const physicsCubeCollider = physicsCubeGO.addComponent(BoxCollider);
+  physicsCubeCollider.size = { x: 1, y: 1, z: 1 };
+  physicsCubeCollider.restitution = 0.6;
 
   // ---- Modello GLTF importato (deliverable principale della Fase 2) ---
   // Se il caricamento fallisce (es. nessuna rete), mostriamo un cubo
@@ -67,10 +112,13 @@ async function main(): Promise<void> {
   }
 
   // ---- Game loop ---------------------------------------------------------
-  const engine = new Engine((dt) => {
-    cameraController.update(dt);
-    renderer.render(scene, camera);
-  });
+  const engine = new Engine(
+    (dt) => {
+      cameraController.update(dt);
+      renderer.render(scene, camera);
+    },
+    Physics.step
+  );
   engine.start();
 }
 

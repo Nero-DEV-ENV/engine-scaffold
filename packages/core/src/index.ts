@@ -8,7 +8,7 @@ export { Engine } from "./Engine.js";
 export { GameObject, Instantiate, Destroy } from "./core/GameObject.js";
 export { Transform } from "./core/Transform.js";
 export { Component } from "./core/Component.js";
-export type { ComponentType } from "./core/Component.js";
+export type { ComponentType, ComponentQueryType } from "./core/Component.js";
 
 // Fase 2 — rendering pipeline e asset loading.
 export { createRenderer, attachAutoResize } from "./rendering/Renderer.js";
@@ -21,3 +21,9 @@ export type { BasicLighting, BasicLightingOptions } from "./rendering/Lighting.j
 
 export { loadGLTF } from "./rendering/AssetLoader.js";
 export type { LoadedModel } from "./rendering/AssetLoader.js";
+
+// Fase 3 — fisica (Rapier/WASM).
+export { RigidBody, RigidBodyType } from "./physics/RigidBody.js";
+export { Collider, BoxCollider, SphereCollider } from "./physics/Collider.js";
+export { initPhysics, setGravity, raycast, step as physicsStep, Physics } from "./physics/Physics.js";
+export type { InitPhysicsOptions, RaycastHit } from "./physics/Physics.js";

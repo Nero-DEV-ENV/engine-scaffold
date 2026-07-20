@@ -60,5 +60,19 @@ export abstract class Component {
   onDestroy(): void {}
 }
 
-/** Tipo costruttore usato da `addComponent`/`getComponent` per identificare una classe Component. */
+/** Tipo costruttore usato da `addComponent` per identificare una classe Component da istanziare — deve essere concreto (non astratto), dato che `addComponent` fa `new ComponentClass()`. */
 export type ComponentType<T extends Component> = new (...args: never[]) => T;
+
+/**
+ * Tipo costruttore usato da `getComponent`/`getComponents` per identificare
+ * una classe (o classe base astratta) da cercare via `instanceof`. Più
+ * permissivo di `ComponentType`: non serve costruire un'istanza per fare una
+ * query, quindi anche una classe base astratta è ammessa — es. `Collider`
+ * (Fase 3) è astratta (BoxCollider/SphereCollider sono le sottoclassi
+ * concrete) ma `getComponents(Collider)` deve comunque poter trovare
+ * qualunque sottotipo concreto presente sul GameObject, esattamente come
+ * `GetComponent<Collider>()` in Unity funziona con la classe base.
+ */
+export type ComponentQueryType<T extends Component> =
+  | (new (...args: never[]) => T)
+  | (abstract new (...args: never[]) => T);
