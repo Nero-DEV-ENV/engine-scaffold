@@ -7,18 +7,31 @@ import { _getLiveGameObjects, _flushPendingDestroys, _resetScene } from "./core/
  * Implementa un accumulator pattern classico (fixed + variable
  * timestep): ad ogni rAF calcola il delta reale, lo accumula, e
  * consuma l'accumulatore a passi fissi di `Time.fixedDeltaTime` per
- * `fixedUpdate` (usato dalla fisica in Fase 3 — per ora nessun
- * componente lo implementa ancora, ma il loop è già pronto). Il
- * variable-timestep `update` gira invece una volta per frame con il
- * delta reale, non quantizzato: è quello giusto per input, animazioni
- * e — nel deliverable di questa fase — la rotazione del cubo.
+ * `fixedUpdate`. Il variable-timestep `update` gira invece una volta
+ * per frame con il delta reale, non quantizzato: è quello giusto per
+ * input, animazioni e — nel deliverable di Fase 2 — la rotazione del
+ * cubo.
  *
  * Ordine per frame:
  *   1. accumulator += realDeltaTime (clampato per evitare "spiral of death")
- *   2. while (accumulator >= fixedDeltaTime): fixedUpdate, accumulator -= fixedDeltaTime
+ *   2. while (accumulator >= fixedDeltaTime): fixedUpdate su tutti i Component,
+ *      poi onFixedStep(fixedDeltaTime), poi accumulator -= fixedDeltaTime
  *   3. awake() è già stato chiamato da addComponent(); qui chiamiamo
  *      start() una tantum per i componenti nuovi, poi update(dt)
  *   4. flush dei GameObject marcati con Destroy()
+ *
+ * `onFixedStep` (Fase 3) segue lo stesso principio già usato per
+ * `onRenderFrame` in Fase 1/2: l'Engine resta agnostico rispetto a COSA
+ * gira nel suo loop — non sa nulla di three.js né di Rapier — e si limita
+ * a invocare un callback nel punto giusto della sequenza. Chi cablasse un
+ * motore fisico diverso da Rapier passerebbe semplicemente un'altra
+ * funzione qui, senza toccare Engine; e i test di Engine.step() restano
+ * privi di qualunque dipendenza da un motore fisico (vedi index.test.ts,
+ * che costruisce `new Engine()` senza fisica). Invocato DENTRO il while,
+ * dopo `fixedUpdate` su tutti i Component: così un corpo fisico kinematic
+ * il cui target viene impostato da uno script utente in `fixedUpdate()`
+ * (es. `transform.position = ...`) ha quel valore già aggiornato prima che
+ * il mondo fisico avanzi nello stesso tick.
  */
 export class Engine {
   private _running = false;
@@ -30,14 +43,23 @@ export class Engine {
   private static readonly MAX_FRAME_DELTA = 0.25;
 
   private readonly _onRenderFrame: (dt: number) => void;
+  private readonly _onFixedStep: (fixedDt: number) => void;
 
   /**
    * @param onRenderFrame Callback invocata una volta per frame variabile,
    *   dopo update() dei componenti e prima del flush dei Destroy — tipicamente
    *   qui il chiamante fa `renderer.render(scene, camera)`.
+   * @param onFixedStep Callback invocata una volta per ogni iterazione fixed-step
+   *   dell'accumulator (zero o più volte per frame variabile), dopo il
+   *   `fixedUpdate` di tutti i Component — tipicamente qui il chiamante fa
+   *   `Physics.step(fixedDt)` (Fase 3, vedi packages/core/src/physics/Physics.ts).
    */
-  constructor(onRenderFrame: (dt: number) => void = () => {}) {
+  constructor(
+    onRenderFrame: (dt: number) => void = () => {},
+    onFixedStep: (fixedDt: number) => void = () => {}
+  ) {
     this._onRenderFrame = onRenderFrame;
+    this._onFixedStep = onFixedStep;
   }
 
   get running(): boolean {
@@ -95,6 +117,7 @@ export class Engine {
     const fixedDt = Time.fixedDeltaTime;
     while (this._accumulator >= fixedDt) {
       this._runFixedUpdate(fixedDt);
+      this._onFixedStep(fixedDt);
       this._accumulator -= fixedDt;
     }
 

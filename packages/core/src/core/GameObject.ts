@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { Transform } from "./Transform.js";
-import type { Component, ComponentType } from "./Component.js";
+import type { Component, ComponentType, ComponentQueryType } from "./Component.js";
 import { _registerGameObject, _unregisterGameObject } from "./Scene.js";
 
 /**
@@ -70,16 +70,16 @@ export class GameObject {
     return component;
   }
 
-  /** Restituisce il primo componente del tipo dato, o null se assente. */
-  getComponent<T extends Component>(ComponentClass: ComponentType<T>): T | null {
+  /** Restituisce il primo componente del tipo dato (anche una classe base astratta, es. `Collider`), o null se assente. */
+  getComponent<T extends Component>(ComponentClass: ComponentQueryType<T>): T | null {
     for (const c of this._components) {
       if (c instanceof ComponentClass) return c;
     }
     return null;
   }
 
-  /** Restituisce tutti i componenti del tipo dato presenti su questo GameObject. */
-  getComponents<T extends Component>(ComponentClass: ComponentType<T>): T[] {
+  /** Restituisce tutti i componenti del tipo dato (anche una classe base astratta, es. `Collider`) presenti su questo GameObject. */
+  getComponents<T extends Component>(ComponentClass: ComponentQueryType<T>): T[] {
     return this._components.filter((c): c is T => c instanceof ComponentClass);
   }
 
