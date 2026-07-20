@@ -11,10 +11,10 @@
   },
   "dependencies": {
     "@engine/core": "workspace:*",
-    "three": "^0.168.0"
+    "three": "^0.185.0"
   },
   "devDependencies": {
     "vite": "^5.4.6",
-    "@types/three": "^0.168.0"
+    "@types/three": "^0.185.0"
   }
 }

@@ -16,7 +16,7 @@ pensato per essere browser-native, collaborativo e installabile come PWA.
 
 - [x] Fase 0 — Setup monorepo, CI, scheletro package
 - [x] Fase 1 — Core runtime (GameObject/Transform/Component/loop)
-- [ ] Fase 2 — Rendering pipeline (WebGPURenderer) + asset loading
+- [x] Fase 2 — Rendering pipeline (WebGPURenderer) + asset loading
 - [ ] Fase 3 — Fisica (Rapier)
 - [ ] Fase 4 — Editor MVP (PWA installabile)
 - [ ] Fase 5 — Serializzazione scene/prefab
@@ -48,6 +48,37 @@ const cube = new GameObject("Cube");
 cube.addComponent(Spin);
 
 new Engine(() => renderer.render(scene, camera)).start();
+```
+
+## API core (Fase 2)
+
+`@engine/core` espone inoltre, per la pipeline di rendering:
+
+- `createRenderer(options?)` — crea e inizializza un `WebGPURenderer` (async). Se `navigator.gpu` non è disponibile, three.js esegue da solo il fallback al backend WebGL2 (nessuna detection custom). Restituisce `{ renderer, isWebGPU }`.
+- `attachAutoResize(renderer, camera)` — aggiorna aspect ratio della camera e dimensioni del renderer al resize della finestra; restituisce una funzione di cleanup.
+- `createBasicLighting(options?)` — ambient + directional key light, restituite come GameObject (`{ ambient, keyLight }`), stesso pattern di `Instantiate`.
+- `OrbitCameraController` — wrapper su `OrbitControls` (three.js addon), API `update(dt)` / `setTarget(x, y, z)` / `dispose()`.
+- `loadGLTF(url, name?)` — carica un asset `.gltf`/`.glb` e lo avvolge in un GameObject pronto per `scene.add()`; i materiali sono PBR di default (comportamento nativo di `GLTFLoader`). Restituisce `{ gameObject, animations, gltf }`.
+
+Nota architetturale: solo `Renderer.ts` importa dal build `three/webgpu` (richiede un `document` reale, quindi solo browser); il resto del motore (`GameObject`, `Transform`, `Lighting`, `AssetLoader`, `CameraController`) resta sul build classico `three`, così i test restano eseguibili in Node/Vitest. three.js fa dispatch interno via flag (`.isMesh`, `.isCamera`, ecc.) non `instanceof`, quindi mescolare i due build in `renderer.render(scene, camera)` funziona correttamente.
+
+Esempio minimo (vedi `apps/playground/src/main.ts` per l'uso completo):
+
+```ts
+import { createRenderer, createBasicLighting, OrbitCameraController, loadGLTF } from "@engine/core";
+import * as THREE from "three";
+
+const { renderer, isWebGPU } = await createRenderer({ container: document.getElementById("app")! });
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 100);
+
+const lighting = createBasicLighting();
+scene.add(lighting.ambient._object3D, lighting.keyLight._object3D);
+
+const model = await loadGLTF("/models/model.glb");
+scene.add(model.gameObject._object3D);
+
+const cameraController = new OrbitCameraController(camera, renderer.domElement);
 ```
 
 ## Sviluppo
