@@ -1,0 +1,14 @@
+{
+  "name": "@engine/cli",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "engine": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "echo \"no tests yet\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}
