@@ -29,7 +29,13 @@ importers:
       '@engine/core':
         specifier: workspace:*
         version: link:../../packages/core
+      three:
+        specifier: ^0.168.0
+        version: 0.168.0
     devDependencies:
+      '@types/three':
+        specifier: ^0.168.0
+        version: 0.168.0
       vite:
         specifier: ^5.4.6
         version: 5.4.21

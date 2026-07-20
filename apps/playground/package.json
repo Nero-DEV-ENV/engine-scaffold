@@ -10,9 +10,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@engine/core": "workspace:*"
+    "@engine/core": "workspace:*",
+    "three": "^0.168.0"
   },
   "devDependencies": {
-    "vite": "^5.4.6"
+    "vite": "^5.4.6",
+    "@types/three": "^0.168.0"
   }
 }
