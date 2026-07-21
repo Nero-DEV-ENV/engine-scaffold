@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createEditorScene, type EditorSceneHandle } from "../scene/createEditorScene.js";
+import { sceneRootsStore, selectionStore } from "../store/editorStore.js";
 
 /**
  * Viewport — pannello che ospita il canvas three.js.
@@ -19,6 +20,17 @@ import { createEditorScene, type EditorSceneHandle } from "../scene/createEditor
  * che la finestra del browser cambi (es. drag di uno splitter fra pannelli,
  * feature non ancora presente ma per cui questo resize deve già essere pronto).
  * Un ResizeObserver sul container risolve entrambi i casi.
+ *
+ * Fase 4B: alla risoluzione di `createEditorScene` pubblica i GameObject
+ * radice su `sceneRootsStore` (letto da Hierarchy.tsx) — la selezione e
+ * l'highlight nel Viewport restano invece interamente dentro
+ * `createEditorScene.ts` (raycast sul canvas + sottoscrizione a
+ * `selectionStore`), perché quel modulo ha già in mano scene/camera/
+ * renderer e non deve diventare un componente React solo per farlo. Allo
+ * smontaggio, sia `sceneRootsStore` che `selectionStore` vengono svuotati:
+ * altrimenti un rimontaggio (HMR, o un futuro secondo viewport) mostrerebbe
+ * in Hierarchy dei GameObject della scena precedente già distrutta da
+ * `Engine._resetAll()`.
  */
 export function Viewport(): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -39,6 +51,7 @@ export function Viewport(): JSX.Element {
           return;
         }
         handle = createdHandle;
+        sceneRootsStore.set(createdHandle.roots);
         resizeObserver = new ResizeObserver((entries) => {
           const entry = entries[0];
           if (!entry) return;
@@ -58,6 +71,8 @@ export function Viewport(): JSX.Element {
       cancelled = true;
       resizeObserver?.disconnect();
       handle?.dispose();
+      sceneRootsStore.set([]);
+      selectionStore.set(null);
     };
   }, []);
 
