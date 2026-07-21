@@ -33,6 +33,23 @@ export class OrbitCameraController {
     return this.controls.target;
   }
 
+  /**
+   * Se `false`, i controlli non rispondono più all'input utente (drag/wheel
+   * restano collegati al DOM ma non hanno effetto — delega diretta a
+   * `OrbitControls.enabled`, nativo dell'addon, nessuno stato duplicato qui).
+   * Serve all'editor (Fase 4C) per disattivare l'orbit mentre si trascina il
+   * gizmo di trasformazione nel Viewport: altrimenti i due controlli si
+   * contenderebbero lo stesso drag sul canvas (l'orbit ruoterebbe la camera
+   * mentre il gizmo tenta di muovere l'oggetto selezionato).
+   */
+  get enabled(): boolean {
+    return this.controls.enabled;
+  }
+
+  set enabled(value: boolean) {
+    this.controls.enabled = value;
+  }
+
   /** Sposta il punto di orbita e aggiorna subito i controlli. */
   setTarget(x: number, y: number, z: number): void {
     this.controls.target.set(x, y, z);

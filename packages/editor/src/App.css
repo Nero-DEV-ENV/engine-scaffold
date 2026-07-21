@@ -140,3 +140,58 @@ body {
   background: #234b7c;
   color: #eaf1ff;
 }
+
+.inspector-object-name {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #eaf1ff;
+}
+
+.inspector-row {
+  margin-bottom: 10px;
+}
+
+.inspector-row-title {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: #9aa0aa;
+}
+
+.inspector-row-fields {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.inspector-field {
+  display: flex;
+  align-items: center;
+  background: #1f2227;
+  border: 1px solid #2a2d32;
+  border-radius: 4px;
+  padding: 0 6px;
+}
+
+.inspector-field-label {
+  font-size: 10px;
+  color: #6b7078;
+  margin-right: 4px;
+}
+
+.inspector-field-input {
+  width: 100%;
+  min-width: 0;
+  border: none;
+  background: none;
+  color: #e4e6eb;
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 0;
+}
+
+.inspector-field-input:focus {
+  outline: none;
+  color: #eaf1ff;
+}
