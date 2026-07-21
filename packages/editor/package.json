@@ -6,16 +6,20 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "echo \"no tests yet (Fase 4)\"",
+    "test": "echo \"no tests yet (4A: bootstrap DOM/WebGPU, stesso motivo di apps/playground)\"",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@engine/core": "workspace:*",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "three": "^0.185.0"
   },
   "devDependencies": {
     "vite": "^5.4.6",
-    "@vitejs/plugin-react": "^4.3.1"
+    "@vitejs/plugin-react": "^4.3.1",
+    "@types/three": "^0.185.0",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0"
   }
 }
