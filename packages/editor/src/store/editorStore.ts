@@ -49,3 +49,24 @@ export const selectionStore = createExternalStore<GameObject | null>(null);
  * risolve (vedi `EditorSceneHandle.roots`), svuotato al dispose.
  */
 export const sceneRootsStore = createExternalStore<readonly GameObject[]>([]);
+
+/**
+ * Contatore bumpato ad ogni modifica del Transform del GameObject
+ * attualmente selezionato — sia dal drag del gizmo nel Viewport (evento
+ * "objectChange" di TransformControls, vedi createEditorScene.ts) sia dalla
+ * modifica di un campo numerico in Inspector.tsx (Fase 4C).
+ *
+ * Necessario perché `Transform.position/eulerAngles/localScale` sono
+ * istanze THREE.Vector3/Euler mutate in place (`Object3D.position.set()`
+ * ecc.): mutarle non genera di per sé alcun re-render React. Senza questo
+ * contatore, l'Inspector non saprebbe che i valori mostrati sono stale
+ * mentre l'utente trascina il gizmo (il gizmo stesso non ha bisogno di
+ * leggere questo store: segue l'Object3D selezionato direttamente ad ogni
+ * frame del loop di rendering, non passa dai campi Inspector).
+ */
+export const transformVersionStore = createExternalStore<number>(0);
+
+/** Incrementa `transformVersionStore` — da chiamare dopo ogni scrittura sul Transform del GameObject selezionato. */
+export function bumpTransformVersion(): void {
+  transformVersionStore.set(transformVersionStore.get() + 1);
+}

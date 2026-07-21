@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import {
   Engine,
   GameObject,
@@ -7,7 +8,7 @@ import {
   OrbitCameraController,
 } from "@engine/core";
 import { findOwningGameObject } from "./hierarchy.js";
-import { selectionStore } from "../store/editorStore.js";
+import { selectionStore, bumpTransformVersion } from "../store/editorStore.js";
 
 /**
  * createEditorScene — bootstrap imperativo della scena three.js/@engine/core
@@ -26,6 +27,23 @@ import { selectionStore } from "../store/editorStore.js";
  * scrivendo `selectionStore` — così un click su una riga di Hierarchy si
  * riflette nel Viewport (e viceversa) senza che questo modulo sappia nulla
  * di React, e senza che i pannelli React sappiano nulla di three.js.
+ *
+ * Fase 4C: aggiunge `TransformControls` (addon three.js) collegato al
+ * GameObject selezionato. API verificata empiricamente sui tipi installati
+ * (three 0.185.1, vedi node_modules/@types/three): l'helper visivo va
+ * aggiunto alla scena via `.getHelper()`, non con `scene.add(controls)`
+ * come nelle versioni precedenti di three.js. La sincronizzazione
+ * gizmo→Object3D è automatica e gratuita (il loop di rendering richiama
+ * `renderer.render(scene, camera)` ad ogni frame, e l'helper ricalcola la
+ * propria posizione dalla matrice mondo dell'oggetto agganciato ad ogni
+ * frame): non serve alcun codice di sync esplicito per quella direzione.
+ * La direzione opposta (un campo Inspector modificato deve "spostare" il
+ * gizmo) funziona per lo stesso motivo, gratis: Inspector.tsx scrive
+ * direttamente su `transform.setPosition`/ecc., il prossimo frame del loop
+ * fa il resto. L'unica sincronizzazione che richiede codice esplicito è
+ * gizmo→Inspector (i campi numerici devono aggiornarsi mentre si trascina),
+ * gestita con `transformVersionStore`/`bumpTransformVersion` (vedi
+ * store/editorStore.ts) sull'evento "objectChange" di TransformControls.
  */
 
 export interface EditorSceneHandle {
@@ -115,6 +133,67 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
   // dalla mancanza di geometria.
   const roots: readonly GameObject[] = [groundGO, cubeGO, sphereGO, lighting.ambient, lighting.keyLight];
 
+  // ---- Gizmo di trasformazione (Fase 4C) --------------------------------
+  // Istanziato PRIMA di registrare qui sotto i listener pointerdown/pointerup
+  // di selezione: il costruttore di TransformControls collega i propri
+  // listener nativi al domElement (via `connect()`), quindi su un dato
+  // evento pointerdown del browser il suo handler interno gira per primo e
+  // imposta subito `dragging = true` se il pointer ha colpito il gizmo —
+  // onPointerDown (sotto) può quindi leggere `transformControls.dragging`
+  // per riconoscere "questo press è iniziato sul gizmo" e ignorarlo del
+  // tutto ai fini della selezione, invece di affidarsi solo alla soglia di
+  // movimento (che da sola intercetterebbe un vero drag, ma non un click
+  // secco sul gizmo che non sposta il mouse).
+  const transformControls = new TransformControls(camera, renderer.domElement);
+  const gizmoHelper = transformControls.getHelper();
+  scene.add(gizmoHelper);
+
+  // Il gizmo si aggancia a QUALUNQUE GameObject selezionato, non solo a
+  // quelli con Mesh (a differenza di updateHighlight/hasVisibleGeometry più
+  // sotto): sposta il Transform (posizione/rotazione/scala dell'Object3D),
+  // operazione che non richiede alcun bounding box — un vincolo diverso da
+  // quello del BoxHelper, quindi una regola diversa qui è corretta e non un
+  // ramo if arbitrario. Muovere una luce (AmbientLight/KeyLight) con il
+  // gizmo ha senso quanto muovere un GameObject con Mesh: cambia comunque
+  // transform.position, che per la KeyLight direzionale ha un effetto
+  // visivo reale sulla scena; per l'AmbientLight la posizione non
+  // influenza il rendering, ma questo è già vero indipendentemente dal
+  // gizmo — non un motivo per trattare le luci diversamente in questo
+  // punto del codice.
+  function updateGizmoTarget(selected: GameObject | null): void {
+    if (selected) {
+      transformControls.attach(selected._object3D);
+    } else {
+      transformControls.detach();
+    }
+  }
+
+  updateGizmoTarget(selectionStore.get());
+  const unsubscribeGizmoTarget = selectionStore.subscribe(() => {
+    updateGizmoTarget(selectionStore.get());
+  });
+
+  // Disabilita l'OrbitCameraController mentre si trascina il gizmo:
+  // altrimenti i due controlli si contenderebbero lo stesso drag sul canvas
+  // (l'orbit ruoterebbe la camera mentre il gizmo tenta di spostare
+  // l'oggetto). `event.value` è tipizzato `unknown` nell'event map generico
+  // di TransformControls (vedi il .d.ts installato in @types/three): a
+  // runtime è però sempre il nuovo valore booleano di `dragging`, una
+  // proprietà definita con lo stesso pattern get/set-con-dispatch di tutte
+  // le altre proprietà "-changed" dei Controls tre.js (verificato leggendo
+  // TransformControls.js in node_modules, non assunto dal solo .d.ts).
+  transformControls.addEventListener("dragging-changed", (event) => {
+    cameraController.enabled = !(event.value as boolean);
+  });
+
+  // Bump del contatore ad ogni modifica del Transform trascinando il
+  // gizmo: Inspector.tsx vi si sottoscrive per ridisegnare i campi numerici
+  // con i valori aggiornati mentre l'utente trascina (vedi
+  // transformVersionStore/bumpTransformVersion in store/editorStore.ts).
+  transformControls.addEventListener("objectChange", () => {
+    bumpTransformVersion();
+  });
+
   // ---- Selezione: raycast dal click sul canvas ------------------------
 
   const raycaster = new THREE.Raycaster();
@@ -122,6 +201,11 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
   let pointerDownPosition: { x: number; y: number } | null = null;
 
   function onPointerDown(event: PointerEvent): void {
+    // Vedi il commento sopra la creazione di `transformControls`: se il
+    // press ha già colpito il gizmo (dragging passato a true dal listener
+    // nativo di TransformControls, che gira prima di questo), non lo
+    // trattiamo come un possibile click di selezione.
+    if (transformControls.dragging) return;
     pointerDownPosition = { x: event.clientX, y: event.clientY };
   }
 
@@ -186,9 +270,10 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
   const engine = new Engine((dt) => {
     cameraController.update(dt);
     // Ricalcola il box dell'highlight ad ogni frame, non solo al cambio
-    // selezione: non necessario finché nulla si muove (questa fase), ma
-    // evita di dover ritoccare questo modulo in Fase 4C, quando il gizmo
-    // potrà spostare l'oggetto selezionato mentre resta selezionato.
+    // selezione: ora che il gizmo (Fase 4C) può spostare l'oggetto
+    // selezionato mentre resta selezionato, il box degenererebbe (resterebbe
+    // fermo alla posizione di quando è stato creato) senza questo update
+    // per-frame.
     highlightHelper?.update();
     renderer.render(scene, camera);
   });
@@ -210,6 +295,21 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
     renderer.domElement.removeEventListener("pointerdown", onPointerDown);
     renderer.domElement.removeEventListener("pointerup", onPointerUp);
     unsubscribeSelection();
+    unsubscribeGizmoTarget();
+    // detach() prima di dispose(): evita che TransformControls tenti di
+    // continuare a leggere l'Object3D agganciato durante il proprio
+    // teardown. controls.dispose() (ereditato dalla classe base astratta
+    // `Controls` di three.js, non specifico di TransformControls) scollega
+    // i listener DOM registrati dal costruttore; getHelper().dispose() è una
+    // chiamata distinta e necessaria a parte: libera le geometrie/materiali
+    // del gizmo visivo (TransformControlsRoot), non toccati da
+    // controls.dispose() (verificato leggendo TransformControls.js: sono
+    // due metodi separati con responsabilità distinte, non uno alias
+    // dell'altro).
+    transformControls.detach();
+    transformControls.dispose();
+    gizmoHelper.dispose();
+    scene.remove(gizmoHelper);
     if (highlightHelper) {
       scene.remove(highlightHelper);
       highlightHelper.dispose();

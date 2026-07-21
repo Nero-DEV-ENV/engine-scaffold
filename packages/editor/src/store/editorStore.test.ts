@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { selectionStore, sceneRootsStore } from "./editorStore.js";
+import { selectionStore, sceneRootsStore, transformVersionStore, bumpTransformVersion } from "./editorStore.js";
 import type { GameObject } from "@engine/core";
 
 /**
@@ -15,6 +15,7 @@ import type { GameObject } from "@engine/core";
 beforeEach(() => {
   selectionStore.set(null);
   sceneRootsStore.set([]);
+  transformVersionStore.set(0);
 });
 
 function fakeGameObject(name: string): GameObject {
@@ -72,6 +73,33 @@ describe("sceneRootsStore", () => {
     const roots = [fakeGameObject("Ground"), fakeGameObject("Cube")];
     sceneRootsStore.set(roots);
     expect(sceneRootsStore.get()).toBe(roots);
+  });
+});
+
+describe("transformVersionStore", () => {
+  it("get() restituisce 0 di default", () => {
+    expect(transformVersionStore.get()).toBe(0);
+  });
+
+  it("bumpTransformVersion() incrementa di 1 ad ogni chiamata", () => {
+    bumpTransformVersion();
+    expect(transformVersionStore.get()).toBe(1);
+    bumpTransformVersion();
+    bumpTransformVersion();
+    expect(transformVersionStore.get()).toBe(3);
+  });
+
+  it("bumpTransformVersion() notifica i listener (valore sempre diverso, mai filtrato da Object.is)", () => {
+    let notifications = 0;
+    const unsubscribe = transformVersionStore.subscribe(() => {
+      notifications++;
+    });
+
+    bumpTransformVersion();
+    bumpTransformVersion();
+    expect(notifications).toBe(2);
+
+    unsubscribe();
   });
 });
 
