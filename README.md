@@ -18,8 +18,7 @@ pensato per essere browser-native, collaborativo e installabile come PWA.
 - [x] Fase 1 — Core runtime (GameObject/Transform/Component/loop)
 - [x] Fase 2 — Rendering pipeline (WebGPURenderer) + asset loading
 - [x] Fase 3 — Fisica (Rapier)
-- [ ] Fase 4 — Editor MVP (PWA installabile) — 4A/4B/4C completate su branch
-      dedicato, in attesa di merge su `main`; 4D (PWA + hardening) in corso
+- [x] Fase 4 — Editor MVP (PWA installabile)
 - [ ] Fase 5 — Serializzazione scene/prefab
 - [ ] Fase 6 — Differenziatore (editor collaborativo real-time)
 
