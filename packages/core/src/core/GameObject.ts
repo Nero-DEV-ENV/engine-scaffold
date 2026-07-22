@@ -17,6 +17,17 @@ import { _registerGameObject, _unregisterGameObject } from "./Scene.js";
  */
 export class GameObject {
   name: string;
+
+  /**
+   * Identificatore univoco e stabile del GameObject. Generato automaticamente
+   * (`crypto.randomUUID()`) a meno che non venga fornito esplicitamente — usato
+   * dalla serializzazione (Fase 5, vedi `serialization/SceneSerializer.ts`) per
+   * preservare l'identità di un GameObject attraverso un ciclo save/load, così
+   * un riferimento salvato altrove (es. un futuro sistema di prefab/istanze)
+   * continua a puntare allo stesso oggetto logico dopo un reload.
+   */
+  readonly id: string;
+
   readonly transform: Transform;
 
   /** @internal — l'Object3D three.js sottostante. Usato da rendering/Transform. */
@@ -28,8 +39,9 @@ export class GameObject {
   /** @internal — marcato true da Destroy(); rimosso dalla Scene a fine frame. */
   _destroyed = false;
 
-  constructor(name = "GameObject") {
+  constructor(name = "GameObject", id?: string) {
     this.name = name;
+    this.id = id ?? crypto.randomUUID();
     this._object3D = new THREE.Object3D();
     this._object3D.name = name;
     this.transform = new Transform(this._object3D);

@@ -3,6 +3,7 @@ import { TransformControls } from "three/examples/jsm/controls/TransformControls
 import {
   Engine,
   GameObject,
+  MeshRenderer,
   createRenderer,
   createBasicLighting,
   OrbitCameraController,
@@ -94,27 +95,31 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
   const lighting = createBasicLighting();
   scene.add(lighting.ambient._object3D, lighting.keyLight._object3D);
 
+  // Ground/Cube/Sphere usano MeshRenderer (Fase 5) invece di una THREE.Mesh
+  // costruita a mano: la rappresentazione visiva (forma/colore) diventa così
+  // un dato leggibile da SceneSerializer, non più codice imperativo qui —
+  // condizione necessaria perché la scena sopravviva a un ciclo save/load
+  // (deliverable di questa fase). MeshRenderer.shape "plane" è già
+  // orizzontale di default (vedi MeshRenderer.ts), quindi la rotazione
+  // correttiva che prima veniva applicata qui a mano non serve più.
   const groundGO = new GameObject("Ground");
-  const groundMesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(10, 10),
-    new THREE.MeshStandardMaterial({ color: 0x2f3237 })
-  );
-  groundMesh.rotation.x = -Math.PI / 2;
-  groundGO._object3D.add(groundMesh);
+  const groundRenderer = groundGO.addComponent(MeshRenderer);
+  groundRenderer.shape = { kind: "plane", width: 10, height: 10 };
+  groundRenderer.color = 0x2f3237;
   scene.add(groundGO._object3D);
 
   const cubeGO = new GameObject("Cube");
   cubeGO.transform.setPosition(-1, 0.5, 0);
-  cubeGO._object3D.add(
-    new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: 0x4f8ef7 }))
-  );
+  const cubeRenderer = cubeGO.addComponent(MeshRenderer);
+  cubeRenderer.shape = { kind: "box", size: { x: 1, y: 1, z: 1 } };
+  cubeRenderer.color = 0x4f8ef7;
   scene.add(cubeGO._object3D);
 
   const sphereGO = new GameObject("Sphere");
   sphereGO.transform.setPosition(1, 0.5, 0);
-  sphereGO._object3D.add(
-    new THREE.Mesh(new THREE.SphereGeometry(0.5, 32, 16), new THREE.MeshStandardMaterial({ color: 0xe0663f }))
-  );
+  const sphereRenderer = sphereGO.addComponent(MeshRenderer);
+  sphereRenderer.shape = { kind: "sphere", radius: 0.5 };
+  sphereRenderer.color = 0xe0663f;
   scene.add(sphereGO._object3D);
 
   // Ordine di Hierarchy: prima i GameObject "visibili" della scena demo,

@@ -22,8 +22,26 @@ export type { BasicLighting, BasicLightingOptions } from "./rendering/Lighting.j
 export { loadGLTF } from "./rendering/AssetLoader.js";
 export type { LoadedModel } from "./rendering/AssetLoader.js";
 
+export { MeshRenderer } from "./rendering/MeshRenderer.js";
+export type { MeshShape } from "./rendering/MeshRenderer.js";
+
 // Fase 3 — fisica (Rapier/WASM).
 export { RigidBody, RigidBodyType } from "./physics/RigidBody.js";
 export { Collider, BoxCollider, SphereCollider } from "./physics/Collider.js";
 export { initPhysics, setGravity, raycast, step as physicsStep, Physics } from "./physics/Physics.js";
 export type { InitPhysicsOptions, RaycastHit } from "./physics/Physics.js";
+
+// Fase 5 — serializzazione scene/prefab (JSON).
+export { serializeScene, deserializeScene } from "./serialization/SceneSerializer.js";
+export type {
+  SceneData,
+  GameObjectData,
+  ComponentData,
+  TransformData,
+  Vector3Data,
+  QuaternionData,
+  MeshRendererData,
+  RigidBodyData,
+  BoxColliderData,
+  SphereColliderData,
+} from "./serialization/types.js";
