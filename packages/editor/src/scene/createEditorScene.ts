@@ -7,10 +7,13 @@ import {
   createRenderer,
   createBasicLighting,
   OrbitCameraController,
+  initPhysics,
+  Physics,
+  _resetPhysics,
 } from "@engine/core";
 import type { SceneData } from "@engine/core";
 import { findOwningGameObject } from "./hierarchy.js";
-import { clearGameObjects, loadSceneData } from "./sceneLoad.js";
+import { loadSceneReplacingCurrent } from "./sceneLoad.js";
 import { selectionStore, sceneRootsStore, bumpTransformVersion } from "../store/editorStore.js";
 
 /**
@@ -114,6 +117,19 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
 
   const lighting = createBasicLighting();
   scene.add(lighting.ambient._object3D, lighting.keyLight._object3D);
+
+  // ---- Fisica (Fase 5C.1) ----------------------------------------------
+  // await PRIMA di aggiungere qualunque RigidBody/Collider e prima di
+  // engine.start() più sotto — stesso pattern/motivo di apps/playground/
+  // src/main.ts (vedi il commento su initPhysics in
+  // packages/core/src/physics/Physics.ts): se l'Engine iniziasse a
+  // ticchettare (o un Load caricasse RigidBody/Collider) prima che il WASM
+  // di Rapier sia pronto, Physics.step() fallirebbe rumorosamente. Nessuno
+  // dei tre GameObject demo qui sotto ha ancora componenti fisici — questa
+  // fase collega solo il World, la fisica reale nell'editor arriva oggi
+  // solo da un Load di una scena salvata che contiene RigidBody/Collider
+  // (vedi Inspector.tsx: l'editor non ha ancora una UI "Add Component").
+  await initPhysics();
 
   // Ground/Cube/Sphere usano MeshRenderer (Fase 5) invece di una THREE.Mesh
   // costruita a mano: la rappresentazione visiva (forma/colore) diventa così
@@ -299,16 +315,23 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
     updateHighlight(selectionStore.get());
   });
 
-  const engine = new Engine((dt) => {
-    cameraController.update(dt);
-    // Ricalcola il box dell'highlight ad ogni frame, non solo al cambio
-    // selezione: ora che il gizmo (Fase 4C) può spostare l'oggetto
-    // selezionato mentre resta selezionato, il box degenererebbe (resterebbe
-    // fermo alla posizione di quando è stato creato) senza questo update
-    // per-frame.
-    highlightHelper?.update();
-    renderer.render(scene, camera);
-  });
+  const engine = new Engine(
+    (dt) => {
+      cameraController.update(dt);
+      // Ricalcola il box dell'highlight ad ogni frame, non solo al cambio
+      // selezione: ora che il gizmo (Fase 4C) può spostare l'oggetto
+      // selezionato mentre resta selezionato, il box degenererebbe (resterebbe
+      // fermo alla posizione di quando è stato creato) senza questo update
+      // per-frame.
+      highlightHelper?.update();
+      renderer.render(scene, camera);
+    },
+    // Fase 5C.1 — stesso `Physics.step` passato da apps/playground/src/main.ts:
+    // un RigidBody/Collider caricato in editor (oggi solo via Load, vedi il
+    // commento su initPhysics più sopra) viene ora davvero simulato in preview,
+    // non più solo dato serializzato inerte.
+    Physics.step
+  );
   engine.start();
 
   /**
@@ -318,10 +341,16 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
    * aggiornare lo stato che SOLO questa closure possiede (`roots`,
    * `rootObject3Ds` per il raycast) e gli store React (`sceneRootsStore`
    * per Hierarchy, `selectionStore` per gizmo/highlight).
+   *
+   * Fase 5C.4 — `loadSceneReplacingCurrent` costruisce la nuova scena PRIMA
+   * di distruggere quella corrente: se `data` è corrotto/malformato,
+   * l'eccezione propaga da lì senza che questa funzione arrivi mai a
+   * riassegnare `roots`/gli store sotto — l'editor resta esattamente come
+   * prima del Load fallito (nessuna riga da rimuovere/adattare qui per il
+   * caso di errore, il chiamante Topbar.onLoad continua a mostrarlo com'è).
    */
   function loadScene(data: SceneData): void {
-    clearGameObjects(roots, scene);
-    const newRoots = loadSceneData(data, scene);
+    const newRoots = loadSceneReplacingCurrent(data, scene, roots);
     roots = newRoots;
     rootObject3Ds = newRoots.map((go) => go._object3D);
     sceneRootsStore.set(newRoots);
@@ -377,6 +406,13 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
     // effect in React StrictMode) farebbe accumulare GameObject "fantasma"
     // della scena precedente nel game loop successivo.
     Engine._resetAll();
+    // Fase 5C.3 — stesso identico rischio di Engine._resetAll() sopra, ma per
+    // il World di Rapier: Physics.ts è un modulo a stato di modulo esattamente
+    // come Scene.ts, e da quando questa fase collega initPhysics()/Physics.step
+    // (vedi sopra), un remount del Viewport senza questa chiamata libererebbe
+    // un NUOVO RAPIER.World ad ogni bootstrap senza mai `.free()`are quello
+    // precedente (vedi il commento su _resetPhysics in Physics.ts).
+    _resetPhysics();
   }
 
   return { engine, scene, camera, roots, loadScene, setSize, dispose };

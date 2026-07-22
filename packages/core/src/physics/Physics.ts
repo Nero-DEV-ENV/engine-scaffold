@@ -34,10 +34,16 @@ const _registeredColliders = new Set<Collider>();
 /** @internal — collider Rapier (per handle numerico) → Collider component che lo possiede, usato da Physics.raycast per risalire al GameObject colpito. */
 const _colliderOwners = new Map<number, Collider>();
 
-/** @internal — reset completo del modulo, usato nei test (mirror di Engine._resetAll per Scene).
- * Non richiamato da Engine._resetAll(): Engine resta deliberatamente ignaro del modulo Physics
- * (vedi commento su onFixedStep in Engine.ts), quindi i test che toccano la fisica lo chiamano
- * a parte. */
+/** @internal — reset completo del modulo (mirror di Engine._resetAll per Scene). Non richiamato
+ * da Engine._resetAll(): Engine resta deliberatamente ignaro del modulo Physics (vedi commento su
+ * onFixedStep in Engine.ts), quindi chiunque colleghi Physics al proprio loop lo richiama a parte.
+ * Due chiamanti: i test che toccano la fisica (isolamento fra un test e l'altro) e
+ * `EditorSceneHandle.dispose()` (Fase 5C, packages/editor/src/scene/createEditorScene.ts) — da
+ * quando l'editor collega `initPhysics()`/`Physics.step`, senza questa chiamata un
+ * remount del Viewport (HMR, React StrictMode) libererebbe un nuovo `RAPIER.World` senza mai
+ * liberare quello precedente (stesso rischio già gestito per il registry di GameObject via
+ * Engine._resetAll(), vedi il commento in createEditorScene.ts). Esportata da `@engine/core`
+ * (index.ts) proprio per questo secondo chiamante, non solo per uso interno al package. */
 export function _resetPhysics(): void {
   _world?.free();
   _world = null;

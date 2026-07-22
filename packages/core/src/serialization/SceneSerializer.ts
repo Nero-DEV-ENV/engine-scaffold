@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { GameObject } from "../core/GameObject.js";
+import { GameObject, Destroy } from "../core/GameObject.js";
 import type { Component } from "../core/Component.js";
 import { MeshRenderer } from "../rendering/MeshRenderer.js";
 import { Light } from "../rendering/Light.js";
@@ -160,8 +160,13 @@ function applyComponentData(go: GameObject, data: ComponentData): void {
   }
 }
 
-function deserializeGameObject(data: GameObjectData, parent: GameObject | null): GameObject {
+function deserializeGameObject(
+  data: GameObjectData,
+  parent: GameObject | null,
+  created: GameObject[]
+): GameObject {
   const go = new GameObject(data.name, data.id);
+  created.push(go);
   go.setActive(data.active);
   applyTransformData(go, data.transform);
   if (parent) go.transform.setParent(parent.transform);
@@ -170,7 +175,7 @@ function deserializeGameObject(data: GameObjectData, parent: GameObject | null):
     applyComponentData(go, componentData);
   }
   for (const childData of data.children) {
-    deserializeGameObject(childData, go);
+    deserializeGameObject(childData, go, created);
   }
   return go;
 }
@@ -184,6 +189,25 @@ function deserializeGameObject(data: GameObjectData, parent: GameObject | null):
  * NON sono aggiunti automaticamente a una `THREE.Scene`: come per
  * `Instantiate`/il pattern esistente in `createEditorScene.ts`, è compito del
  * chiamante fare `scene.add(root._object3D)` per ciascuno.
+ *
+ * Exception-safe (Fase 5C.4): un `SceneData` corrotto/malformato può far
+ * lanciare la ricostruzione a metà albero — un `ComponentData.type` non
+ * riconosciuto (controllo di esaustività sotto), ma anche un valore interno
+ * non riconosciuto di un tipo altrimenti valido (es. `MeshShape.kind`,
+ * `LightKind.kind`: controlli di esaustività analoghi, sincroni, dentro i
+ * setter di MeshRenderer.shape/Light.kind). `GameObject` si registra nel
+ * registry di Scene.ts nel proprio costruttore, PRIMA che componenti/figli
+ * vengano applicati: senza il try/catch sotto, i GameObject già costruiti al
+ * momento del throw (radici precedenti completate con successo, più il nodo
+ * che ha appena lanciato) resterebbero "fantasmi" nel registry — mai
+ * restituiti al chiamante né aggiunti a una THREE.Scene, ma ancora vivi nel
+ * game loop. `created` accumula ogni GameObject via via costruito in questa
+ * chiamata, a qualunque profondità dell'albero, non solo le radici: su un
+ * fallimento li distruggiamo tutti (stesso `Destroy()` usato ovunque nel
+ * motore — la rimozione dal registry resta quindi rimandata al prossimo
+ * flush di fine-frame, nessun comportamento nuovo) prima di ripropagare
+ * l'errore originale. Il registry torna così esattamente come prima della
+ * chiamata: la deserializzazione è tutto-o-niente.
  */
 export function deserializeScene(data: SceneData): GameObject[] {
   if (data.version !== SCENE_FORMAT_VERSION) {
@@ -191,5 +215,13 @@ export function deserializeScene(data: SceneData): GameObject[] {
       `deserializeScene: versione formato non supportata (${String(data.version)}, attesa ${String(SCENE_FORMAT_VERSION)})`
     );
   }
-  return data.roots.map((rootData) => deserializeGameObject(rootData, null));
+  const created: GameObject[] = [];
+  try {
+    return data.roots.map((rootData) => deserializeGameObject(rootData, null, created));
+  } catch (error) {
+    for (const go of created) {
+      Destroy(go);
+    }
+    throw error;
+  }
 }

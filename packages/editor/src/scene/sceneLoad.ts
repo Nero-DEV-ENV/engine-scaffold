@@ -55,3 +55,29 @@ export function loadSceneData(data: SceneData, scene: THREE.Scene): GameObject[]
   }
   return newRoots;
 }
+
+/**
+ * loadSceneReplacingCurrent — combina `loadSceneData`+`clearGameObjects`
+ * nell'ordine sicuro per la Fase 5C.4: costruisce PRIMA la nuova scena da
+ * `data`, e solo se questo riesce distrugge `currentRoots` (la scena
+ * attualmente in vigore nell'editor).
+ *
+ * `deserializeScene` (SceneSerializer.ts) è exception-safe dalla Fase 5C.4:
+ * un fallimento a metà albero su dato corrotto/malformato ripulisce da sé i
+ * GameObject parzialmente costruiti prima di ripropagare l'errore — quindi
+ * qui non serve alcun try/catch aggiuntivo. Se `loadSceneData` lancia,
+ * l'eccezione propaga PRIMA che questa funzione tocchi `currentRoots`: la
+ * scena precedente resta intatta (mai distrutta, mai rimossa da `scene`),
+ * il chiamante (`EditorSceneHandle.loadScene`, createEditorScene.ts) non
+ * aggiorna il proprio stato (`roots`/store React) e l'editor resta
+ * esattamente come prima del Load fallito.
+ */
+export function loadSceneReplacingCurrent(
+  data: SceneData,
+  scene: THREE.Scene,
+  currentRoots: readonly GameObject[]
+): GameObject[] {
+  const newRoots = loadSceneData(data, scene);
+  clearGameObjects(currentRoots, scene);
+  return newRoots;
+}
