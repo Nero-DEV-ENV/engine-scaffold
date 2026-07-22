@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { GameObject } from "../core/GameObject.js";
 import type { Component } from "../core/Component.js";
 import { MeshRenderer } from "../rendering/MeshRenderer.js";
+import { Light } from "../rendering/Light.js";
 import { RigidBody } from "../physics/RigidBody.js";
 import { BoxCollider, SphereCollider } from "../physics/Collider.js";
 import type { SceneData, GameObjectData, ComponentData, TransformData } from "./types.js";
@@ -34,6 +35,14 @@ function serializeTransform(go: GameObject): TransformData {
 function serializeComponent(component: Component): ComponentData | null {
   if (component instanceof MeshRenderer) {
     return { type: "MeshRenderer", shape: component.shape, color: component.color };
+  }
+  if (component instanceof Light) {
+    return {
+      type: "Light",
+      lightKind: component.kind,
+      color: component.color,
+      intensity: component.intensity,
+    };
   }
   if (component instanceof RigidBody) {
     return { type: "RigidBody", bodyType: component.type, gravityScale: component.gravityScale };
@@ -110,6 +119,13 @@ function applyComponentData(go: GameObject, data: ComponentData): void {
       const renderer = go.addComponent(MeshRenderer);
       renderer.shape = data.shape;
       renderer.color = data.color;
+      return;
+    }
+    case "Light": {
+      const light = go.addComponent(Light);
+      light.kind = data.lightKind;
+      light.color = data.color;
+      light.intensity = data.intensity;
       return;
     }
     case "RigidBody": {

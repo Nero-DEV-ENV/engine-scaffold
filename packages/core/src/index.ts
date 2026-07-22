@@ -25,6 +25,9 @@ export type { LoadedModel } from "./rendering/AssetLoader.js";
 export { MeshRenderer } from "./rendering/MeshRenderer.js";
 export type { MeshShape } from "./rendering/MeshRenderer.js";
 
+export { Light } from "./rendering/Light.js";
+export type { LightKind } from "./rendering/Light.js";
+
 // Fase 3 — fisica (Rapier/WASM).
 export { RigidBody, RigidBodyType } from "./physics/RigidBody.js";
 export { Collider, BoxCollider, SphereCollider } from "./physics/Collider.js";
@@ -41,6 +44,7 @@ export type {
   Vector3Data,
   QuaternionData,
   MeshRendererData,
+  LightData,
   RigidBodyData,
   BoxColliderData,
   SphereColliderData,

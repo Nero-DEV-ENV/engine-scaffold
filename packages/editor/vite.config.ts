@@ -42,6 +42,14 @@ export default defineConfig({
         // Precache di tutti gli asset statici della build: l'editor deve
         // restare avviabile offline dopo la prima visita (requisito Fase 4D).
         globPatterns: ["**/*.{js,css,html,svg,png,ico,webmanifest}"],
+        // Fase 5B: da quando l'editor importa deserializeScene (Load),
+        // il bundle trascina transitivamente Rapier via SceneSerializer.ts
+        // (che importa RigidBody/Collider per lo switch esaustivo dei
+        // componenti) — stesso costo già accettato per apps/playground in
+        // Fase 3 (873KB→3.1MB), non ottimizzato lì né qui: fuori scope per
+        // questa fase. Limite di default di Workbox (2 MiB) altrimenti
+        // rifiuta di precache-are il bundle (~3.2MB) e il build fallisce.
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
       },
     }),
   ],

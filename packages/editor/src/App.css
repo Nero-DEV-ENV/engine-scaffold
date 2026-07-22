@@ -43,6 +43,42 @@ body {
   color: #9fb8e8;
 }
 
+.topbar-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: 16px;
+}
+
+.topbar-button {
+  border: 1px solid #4f8ef7;
+  background: #1b1d21;
+  color: #eaf1ff;
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.topbar-button:disabled {
+  border-color: #3a3d42;
+  color: #6c7078;
+  cursor: default;
+}
+
+.topbar-status {
+  margin-left: 12px;
+  font-size: 12px;
+  color: #9fb8e8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar-status-error {
+  color: #e0663f;
+}
+
 .editor-body {
   flex: 1 1 auto;
   display: grid;

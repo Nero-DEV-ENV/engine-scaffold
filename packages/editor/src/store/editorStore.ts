@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { GameObject } from "@engine/core";
+import type { EditorSceneHandle } from "../scene/createEditorScene.js";
 
 /**
  * editorStore.ts — store esterno minimale condiviso fra codice
@@ -49,6 +50,17 @@ export const selectionStore = createExternalStore<GameObject | null>(null);
  * risolve (vedi `EditorSceneHandle.roots`), svuotato al dispose.
  */
 export const sceneRootsStore = createExternalStore<readonly GameObject[]>([]);
+
+/**
+ * L'`EditorSceneHandle` corrente (Fase 5B), o null se il Viewport non ha
+ * ancora finito il bootstrap/è smontato. Serve perché la Topbar (sibling di
+ * Viewport in App.tsx, per il bottone Save/Load) non condivide alcun
+ * antenato React con `createEditorScene.ts` da cui ricevere l'handle in
+ * altro modo — stesso motivo già alla base di `selectionStore`/
+ * `sceneRootsStore`, qui applicato all'handle stesso invece che a un suo
+ * singolo campo.
+ */
+export const editorSceneHandleStore = createExternalStore<EditorSceneHandle | null>(null);
 
 /**
  * Contatore bumpato ad ogni modifica del Transform del GameObject

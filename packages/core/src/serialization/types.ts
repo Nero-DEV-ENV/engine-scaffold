@@ -1,4 +1,5 @@
 import type { MeshShape } from "../rendering/MeshRenderer.js";
+import type { LightKind } from "../rendering/Light.js";
 import type { RigidBodyType } from "../physics/RigidBody.js";
 
 /**
@@ -53,6 +54,20 @@ export interface MeshRendererData {
   color: number;
 }
 
+/**
+ * Campo chiamato `lightKind` (non `kind`) per lo stesso motivo per cui
+ * `RigidBodyData` chiama il proprio campo `bodyType` invece di `type`:
+ * `type` qui è già il discriminante di `ComponentData` stesso ("Light"),
+ * quindi il campo che rispecchia `Light.kind` sul componente ha bisogno di
+ * un nome diverso per non fare ombra al discriminante.
+ */
+export interface LightData {
+  type: "Light";
+  lightKind: LightKind;
+  color: number;
+  intensity: number;
+}
+
 export interface RigidBodyData {
   type: "RigidBody";
   bodyType: RigidBodyType;
@@ -82,7 +97,7 @@ export interface SphereColliderData {
  * `applyComponentData` (SceneSerializer.ts) — il controllo di esaustività
  * TypeScript in entrambi gli switch fa fallire la build se se ne dimentica uno.
  */
-export type ComponentData = MeshRendererData | RigidBodyData | BoxColliderData | SphereColliderData;
+export type ComponentData = MeshRendererData | LightData | RigidBodyData | BoxColliderData | SphereColliderData;
 
 export interface GameObjectData {
   id: string;
