@@ -31,7 +31,7 @@ export type { LightKind } from "./rendering/Light.js";
 // Fase 3 — fisica (Rapier/WASM).
 export { RigidBody, RigidBodyType } from "./physics/RigidBody.js";
 export { Collider, BoxCollider, SphereCollider } from "./physics/Collider.js";
-export { initPhysics, setGravity, raycast, step as physicsStep, Physics } from "./physics/Physics.js";
+export { initPhysics, setGravity, raycast, step as physicsStep, Physics, _resetPhysics } from "./physics/Physics.js";
 export type { InitPhysicsOptions, RaycastHit } from "./physics/Physics.js";
 
 // Fase 5 — serializzazione scene/prefab (JSON).

@@ -2,12 +2,13 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { Engine } from "../Engine.js";
 import { GameObject } from "../core/GameObject.js";
 import { Component } from "../core/Component.js";
+import { _getLiveGameObjects } from "../core/Scene.js";
 import { MeshRenderer } from "../rendering/MeshRenderer.js";
 import { Light } from "../rendering/Light.js";
 import { RigidBody, RigidBodyType } from "../physics/RigidBody.js";
 import { BoxCollider, SphereCollider } from "../physics/Collider.js";
 import { serializeScene, deserializeScene } from "./SceneSerializer.js";
-import type { SceneData } from "./types.js";
+import type { SceneData, ComponentData } from "./types.js";
 
 /** Round-trip completo attraverso JSON.stringify/parse: verifica che il dato sia davvero JSON-safe, non solo strutturalmente compatibile in memoria. */
 function throughJSON(data: SceneData): SceneData {
@@ -203,5 +204,42 @@ describe("SceneSerializer", () => {
     engine.step(1 / 60);
 
     expect(updateCalls).toBe(1);
+  });
+
+  // ---- Fase 5C.4 — atomicità su fallimento parziale --------------------
+  // deserializeScene deve essere tutto-o-niente: un dato corrotto/malformato
+  // che fa lanciare la ricostruzione a metà albero non deve lasciare
+  // GameObject "fantasma" registrati in Scene.ts (vivi nel game loop, mai
+  // restituiti al chiamante). Verificato via _getLiveGameObjects() dopo un
+  // engine.step(): Destroy() (chiamato dal catch in deserializeScene) rimanda
+  // la rimozione effettiva dal registry al flush di fine-frame, stesso
+  // comportamento già testato altrove nel motore (vedi sceneLoad.test.ts).
+
+  it("un ComponentData.type non riconosciuto su un nodo a metà albero non lascia fantasmi: entrambe le radici (quella già completata e quella che lancia) vengono ripulite", () => {
+    const primaRadiceOk = new GameObject("Prima-ok");
+    const secondaRadiceCorrotta = new GameObject("Seconda-corrotta");
+    const data = throughJSON(serializeScene([primaRadiceOk, secondaRadiceCorrotta]));
+    data.roots[1]!.components.push({ type: "TipoInesistente" } as unknown as ComponentData);
+
+    Engine._resetAll(); // stato pulito, come dopo un vero reload
+
+    expect(() => deserializeScene(data)).toThrow(/ComponentData\.type non gestito/);
+
+    new Engine().step(1 / 60); // flush di fine-frame dei Destroy() interni al catch
+    expect(_getLiveGameObjects()).toHaveLength(0);
+  });
+
+  it("un valore corrotto dentro una union interna di un componente altrimenti riconosciuto (MeshShape.kind) produce lo stesso identico cleanup", () => {
+    const go = new GameObject("Cubo");
+    go.addComponent(MeshRenderer).shape = { kind: "box", size: { x: 1, y: 1, z: 1 } };
+    const data = throughJSON(serializeScene([go]));
+    (data.roots[0]!.components[0] as unknown as { shape: { kind: string } }).shape = { kind: "cono" };
+
+    Engine._resetAll();
+
+    expect(() => deserializeScene(data)).toThrow(/MeshShape non gestita/);
+
+    new Engine().step(1 / 60);
+    expect(_getLiveGameObjects()).toHaveLength(0);
   });
 });
