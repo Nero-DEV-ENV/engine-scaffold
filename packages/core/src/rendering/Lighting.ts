@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { GameObject } from "../core/GameObject.js";
+import { Light } from "./Light.js";
 
 export interface BasicLightingOptions {
   /** Colore/intensità della luce ambientale (illuminazione di riempimento uniforme). Default: bianco, 0.6. */
@@ -13,9 +14,9 @@ export interface BasicLightingOptions {
 }
 
 export interface BasicLighting {
-  /** GameObject che porta la AmbientLight come figlio del proprio Object3D. */
+  /** GameObject che porta un Light Component di tipo "ambient". */
   ambient: GameObject;
-  /** GameObject che porta la DirectionalLight (key light) come figlio del proprio Object3D. */
+  /** GameObject che porta un Light Component di tipo "directional" (key light). */
   keyLight: GameObject;
 }
 
@@ -38,17 +39,32 @@ const DEFAULTS: Required<BasicLightingOptions> = {
  * Restituisce due GameObject (stesso pattern di Instantiate/Fase 1):
  * il chiamante li aggiunge alla THREE.Scene con
  * `scene.add(ambient._object3D, keyLight._object3D)`.
+ *
+ * Da Fase 5B.4: entrambi i GameObject portano un vero `Light` Component
+ * (packages/core/src/rendering/Light.ts) invece di una `THREE.Light` grezza
+ * aggiunta direttamente all'Object3D — necessario perché una luce sopravviva
+ * a un ciclo save/load (vedi SceneSerializer.ts). `ambientColor`/
+ * `keyLightColor` restano tipizzati `THREE.ColorRepresentation` per
+ * flessibilità dell'API pubblica (stringa/numero/Color), ma vengono
+ * convertiti a un numero esadecimale prima di essere assegnati a
+ * `Light.color`, che è `number` — stessa convenzione JSON-safe già usata da
+ * `MeshRenderer.color`.
  */
 export function createBasicLighting(options: BasicLightingOptions = {}): BasicLighting {
   const opts = { ...DEFAULTS, ...options };
 
   const ambient = new GameObject("AmbientLight");
-  ambient._object3D.add(new THREE.AmbientLight(opts.ambientColor, opts.ambientIntensity));
+  const ambientLight = ambient.addComponent(Light);
+  ambientLight.kind = { kind: "ambient" };
+  ambientLight.color = new THREE.Color(opts.ambientColor).getHex();
+  ambientLight.intensity = opts.ambientIntensity;
 
   const keyLight = new GameObject("KeyLight");
-  const directional = new THREE.DirectionalLight(opts.keyLightColor, opts.keyLightIntensity);
-  directional.position.set(...opts.keyLightPosition);
-  keyLight._object3D.add(directional);
+  const keyLightComponent = keyLight.addComponent(Light);
+  const [x, y, z] = opts.keyLightPosition;
+  keyLightComponent.kind = { kind: "directional", position: { x, y, z } };
+  keyLightComponent.color = new THREE.Color(opts.keyLightColor).getHex();
+  keyLightComponent.intensity = opts.keyLightIntensity;
 
   return { ambient, keyLight };
 }

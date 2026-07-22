@@ -3,6 +3,7 @@ import { Engine } from "../Engine.js";
 import { GameObject } from "../core/GameObject.js";
 import { Component } from "../core/Component.js";
 import { MeshRenderer } from "../rendering/MeshRenderer.js";
+import { Light } from "../rendering/Light.js";
 import { RigidBody, RigidBodyType } from "../physics/RigidBody.js";
 import { BoxCollider, SphereCollider } from "../physics/Collider.js";
 import { serializeScene, deserializeScene } from "./SceneSerializer.js";
@@ -90,6 +91,39 @@ describe("SceneSerializer", () => {
 
     expect(restoredSphere!.getComponent(MeshRenderer)!.shape).toEqual({ kind: "sphere", radius: 0.75 });
     expect(restoredPlane!.getComponent(MeshRenderer)!.shape).toEqual({ kind: "plane", width: 5, height: 8 });
+  });
+
+  it("round-trip: Light ambient (color + intensity)", () => {
+    const go = new GameObject("AmbientLight");
+    const light = go.addComponent(Light);
+    light.kind = { kind: "ambient" };
+    light.color = 0x336699;
+    light.intensity = 0.6;
+
+    const data = throughJSON(serializeScene([go]));
+    const [restored] = deserializeScene(data);
+
+    const restoredLight = restored!.getComponent(Light);
+    expect(restoredLight).not.toBeNull();
+    expect(restoredLight!.kind).toEqual({ kind: "ambient" });
+    expect(restoredLight!.color).toBe(0x336699);
+    expect(restoredLight!.intensity).toBe(0.6);
+  });
+
+  it("round-trip: Light directional (color + intensity + posizione)", () => {
+    const go = new GameObject("KeyLight");
+    const light = go.addComponent(Light);
+    light.kind = { kind: "directional", position: { x: 3, y: 5, z: 2 } };
+    light.color = 0xffeedd;
+    light.intensity = 2.5;
+
+    const data = throughJSON(serializeScene([go]));
+    const [restored] = deserializeScene(data);
+
+    const restoredLight = restored!.getComponent(Light);
+    expect(restoredLight!.kind).toEqual({ kind: "directional", position: { x: 3, y: 5, z: 2 } });
+    expect(restoredLight!.color).toBe(0xffeedd);
+    expect(restoredLight!.intensity).toBe(2.5);
   });
 
   it("round-trip: RigidBody (type + gravityScale)", () => {

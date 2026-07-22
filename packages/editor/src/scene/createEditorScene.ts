@@ -8,8 +8,10 @@ import {
   createBasicLighting,
   OrbitCameraController,
 } from "@engine/core";
+import type { SceneData } from "@engine/core";
 import { findOwningGameObject } from "./hierarchy.js";
-import { selectionStore, bumpTransformVersion } from "../store/editorStore.js";
+import { clearGameObjects, loadSceneData } from "./sceneLoad.js";
+import { selectionStore, sceneRootsStore, bumpTransformVersion } from "../store/editorStore.js";
 
 /**
  * createEditorScene — bootstrap imperativo della scena three.js/@engine/core
@@ -51,8 +53,26 @@ export interface EditorSceneHandle {
   readonly engine: Engine;
   readonly scene: THREE.Scene;
   readonly camera: THREE.PerspectiveCamera;
-  /** GameObject radice della scena, nell'ordine da mostrare in Hierarchy (vedi scene/hierarchy.ts). */
+  /**
+   * GameObject radice della scena AL MOMENTO DELLA CREAZIONE di questo
+   * handle (vedi scene/hierarchy.ts) — un `loadScene()` successivo aggiorna
+   * i roots interni e `sceneRootsStore`, ma NON questo campo (snapshot,
+   * come Instantiate/deserializeScene non aggiornano riferimenti già
+   * presi altrove): per i roots correnti dopo un load, leggere
+   * `sceneRootsStore` (store/editorStore.ts), che è la fonte di verità
+   * usata anche da Hierarchy.tsx.
+   */
   readonly roots: readonly GameObject[];
+  /**
+   * Sostituisce la scena corrente con quella descritta da `data`
+   * (equivalente di `SceneManager.LoadScene` in Unity): distrugge ogni
+   * GameObject vivo sotto i roots correnti (vedi scene/sceneLoad.ts),
+   * deserializza `data` al suo posto, e resetta la selezione a null (il
+   * GameObject selezionato prima del load non esiste più — gizmo e
+   * highlight si aggiornano da soli tramite le loro subscription a
+   * `selectionStore`).
+   */
+  loadScene(data: SceneData): void;
   /** Da chiamare ad ogni resize del container (via ResizeObserver, non window resize — vedi Viewport.tsx). */
   setSize(width: number, height: number): void;
   /** Ferma il loop, rilascia renderer/controls/listener e libera il registry globale dei GameObject (vedi Scene.ts). */
@@ -136,7 +156,11 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
   // di questa fase; trattarli "non selezionabili" via un flag dedicato
   // avrebbe aggiunto stato/complessità per un limite che emerge già da solo
   // dalla mancanza di geometria.
-  const roots: readonly GameObject[] = [groundGO, cubeGO, sphereGO, lighting.ambient, lighting.keyLight];
+  // `let`, non `const`: `loadScene` (Fase 5B) sostituisce l'intero array
+  // quando la scena viene ricaricata da IndexedDB — vedi anche
+  // `rootObject3Ds` sotto, che deve restare sincronizzato per il raycast
+  // di selezione.
+  let roots: GameObject[] = [groundGO, cubeGO, sphereGO, lighting.ambient, lighting.keyLight];
 
   // ---- Gizmo di trasformazione (Fase 4C) --------------------------------
   // Istanziato PRIMA di registrare qui sotto i listener pointerdown/pointerup
@@ -202,7 +226,10 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
   // ---- Selezione: raycast dal click sul canvas ------------------------
 
   const raycaster = new THREE.Raycaster();
-  const rootObject3Ds = roots.map((go) => go._object3D);
+  // `let`, non `const`: aggiornato da `loadScene` insieme a `roots`, così il
+  // raycast di selezione colpisce sempre la scena corrente, non quella al
+  // momento del bootstrap.
+  let rootObject3Ds = roots.map((go) => go._object3D);
   let pointerDownPosition: { x: number; y: number } | null = null;
 
   function onPointerDown(event: PointerEvent): void {
@@ -284,6 +311,27 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
   });
   engine.start();
 
+  /**
+   * loadScene — vedi il commento su `EditorSceneHandle.loadScene`. La
+   * pulizia/ricostruzione vera e propria vive in `scene/sceneLoad.ts`
+   * (testabile in automatico, non tocca API browser): qui ci limitiamo ad
+   * aggiornare lo stato che SOLO questa closure possiede (`roots`,
+   * `rootObject3Ds` per il raycast) e gli store React (`sceneRootsStore`
+   * per Hierarchy, `selectionStore` per gizmo/highlight).
+   */
+  function loadScene(data: SceneData): void {
+    clearGameObjects(roots, scene);
+    const newRoots = loadSceneData(data, scene);
+    roots = newRoots;
+    rootObject3Ds = newRoots.map((go) => go._object3D);
+    sceneRootsStore.set(newRoots);
+    // Il GameObject selezionato prima del load non esiste più: le
+    // subscription già registrate su selectionStore (updateGizmoTarget/
+    // updateHighlight, sopra) reagiscono da sole, nessun'altra chiamata
+    // esplicita necessaria qui.
+    selectionStore.set(null);
+  }
+
   function setSize(newWidth: number, newHeight: number): void {
     if (newWidth <= 0 || newHeight <= 0) return;
     camera.aspect = newWidth / newHeight;
@@ -331,5 +379,5 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
     Engine._resetAll();
   }
 
-  return { engine, scene, camera, roots, setSize, dispose };
+  return { engine, scene, camera, roots, loadScene, setSize, dispose };
 }

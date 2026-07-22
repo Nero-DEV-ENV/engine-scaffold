@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createEditorScene, type EditorSceneHandle } from "../scene/createEditorScene.js";
-import { sceneRootsStore, selectionStore } from "../store/editorStore.js";
+import { sceneRootsStore, selectionStore, editorSceneHandleStore } from "../store/editorStore.js";
 
 /**
  * Viewport — pannello che ospita il canvas three.js.
@@ -26,11 +26,15 @@ import { sceneRootsStore, selectionStore } from "../store/editorStore.js";
  * l'highlight nel Viewport restano invece interamente dentro
  * `createEditorScene.ts` (raycast sul canvas + sottoscrizione a
  * `selectionStore`), perché quel modulo ha già in mano scene/camera/
- * renderer e non deve diventare un componente React solo per farlo. Allo
- * smontaggio, sia `sceneRootsStore` che `selectionStore` vengono svuotati:
- * altrimenti un rimontaggio (HMR, o un futuro secondo viewport) mostrerebbe
- * in Hierarchy dei GameObject della scena precedente già distrutta da
- * `Engine._resetAll()`.
+ * renderer e non deve diventare un componente React solo per farlo. Fase
+ * 5B: pubblica anche l'`EditorSceneHandle` stesso su `editorSceneHandleStore`
+ * — serve alla Topbar (Save/Load) per raggiungerlo, dato che non condivide
+ * alcun antenato React con questo componente. Allo smontaggio, tutti e tre
+ * gli store (`sceneRootsStore`, `selectionStore`, `editorSceneHandleStore`)
+ * vengono svuotati: altrimenti un rimontaggio (HMR, o un futuro secondo
+ * viewport) mostrerebbe in Hierarchy dei GameObject della scena precedente
+ * già distrutta da `Engine._resetAll()`, o la Topbar terrebbe un handle
+ * ormai disposto.
  */
 export function Viewport(): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -52,6 +56,7 @@ export function Viewport(): JSX.Element {
         }
         handle = createdHandle;
         sceneRootsStore.set(createdHandle.roots);
+        editorSceneHandleStore.set(createdHandle);
         resizeObserver = new ResizeObserver((entries) => {
           const entry = entries[0];
           if (!entry) return;
@@ -73,6 +78,7 @@ export function Viewport(): JSX.Element {
       handle?.dispose();
       sceneRootsStore.set([]);
       selectionStore.set(null);
+      editorSceneHandleStore.set(null);
     };
   }, []);
 
