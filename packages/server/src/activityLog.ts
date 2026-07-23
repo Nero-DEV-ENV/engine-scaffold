@@ -42,7 +42,9 @@ export type ActivityLogEntry =
   | { type: "room_created"; roomId: string; timestamp: number }
   | { type: "client_joined"; roomId: string; sessionId: string; timestamp: number }
   | { type: "client_left"; roomId: string; sessionId: string; code: number | undefined; timestamp: number }
-  | { type: "room_disposed"; roomId: string; timestamp: number };
+  | { type: "room_disposed"; roomId: string; timestamp: number }
+  | { type: "scene_hydrated"; roomId: string; sessionId: string; gameObjectCount: number; timestamp: number }
+  | { type: "transform_committed"; roomId: string; sessionId: string; gameObjectId: string; timestamp: number };
 
 /** Cambia il file su cui `logActivity` scrive (es. per i test, o per il path reale di deploy). */
 export function configureActivityLog(path: string): void {

@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@engine/core": "workspace:*",
     "colyseus": "^0.17.10",
     "@colyseus/schema": "^4.0.7"
   },

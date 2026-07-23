@@ -2,10 +2,12 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import { readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { TransformData } from "@engine/core";
 import { Server } from "colyseus";
 import { boot, type ColyseusTestServer } from "@colyseus/testing";
 import { EditorRoom } from "./EditorRoom.js";
 import { configureActivityLog, _resetActivityLogForTests } from "./activityLog.js";
+import { waitFor } from "./testUtils.js";
 
 function readLoggedEntries(path: string): unknown[] {
   return readFileSync(path, "utf-8")
@@ -14,7 +16,15 @@ function readLoggedEntries(path: string): unknown[] {
     .map((line) => JSON.parse(line));
 }
 
-describe("EditorRoom — ciclo di vita (Fase 6A)", () => {
+function sampleTransform(x = 1, y = 2, z = 3): TransformData {
+  return {
+    position: { x, y, z },
+    rotation: { x: 0, y: 0, z: 0, w: 1 },
+    scale: { x: 1, y: 1, z: 1 },
+  };
+}
+
+describe("EditorRoom", () => {
   // Un solo boot/shutdown per l'intero file, non uno per test: @colyseus/testing
   // usa una porta fissa (2568) quando gli si passa un'istanza Server già creata
   // (il parametro port di boot() viene ignorato in quel caso — verificato sul
@@ -46,24 +56,91 @@ describe("EditorRoom — ciclo di vita (Fase 6A)", () => {
     _resetActivityLogForTests();
   });
 
-  it("logga room_created alla creazione della stanza", async () => {
-    await testServer.createRoom("editor_room");
-    const entries = readLoggedEntries(logPath);
-    expect(entries).toEqual([expect.objectContaining({ type: "room_created" })]);
+  describe("ciclo di vita (Fase 6A)", () => {
+    it("logga room_created alla creazione della stanza", async () => {
+      await testServer.createRoom("editor_room");
+      const entries = readLoggedEntries(logPath);
+      expect(entries).toEqual([expect.objectContaining({ type: "room_created" })]);
+    });
+
+    it("logga client_joined quando un client entra", async () => {
+      const room = await testServer.createRoom("editor_room");
+      await testServer.connectTo(room);
+      const entries = readLoggedEntries(logPath);
+      expect(entries.some((entry) => (entry as { type: string }).type === "client_joined")).toBe(true);
+    });
+
+    it("logga client_left quando un client esce", async () => {
+      const room = await testServer.createRoom("editor_room");
+      const client = await testServer.connectTo(room);
+      await client.leave();
+      const entries = readLoggedEntries(logPath);
+      expect(entries.some((entry) => (entry as { type: string }).type === "client_left")).toBe(true);
+    });
   });
 
-  it("logga client_joined quando un client entra", async () => {
-    const room = await testServer.createRoom("editor_room");
-    await testServer.connectTo(room);
-    const entries = readLoggedEntries(logPath);
-    expect(entries.some((entry) => (entry as { type: string }).type === "client_joined")).toBe(true);
-  });
+  describe("sync Transform (Fase 6B)", () => {
+    it("hydrateScene popola this.state.transforms per ogni GameObject inviato", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
 
-  it("logga client_left quando un client esce", async () => {
-    const room = await testServer.createRoom("editor_room");
-    const client = await testServer.connectTo(room);
-    await client.leave();
-    const entries = readLoggedEntries(logPath);
-    expect(entries.some((entry) => (entry as { type: string }).type === "client_left")).toBe(true);
+      client.send("hydrateScene", {
+        gameObjects: [
+          { id: "go-1", transform: sampleTransform(1, 2, 3) },
+          { id: "go-2", transform: sampleTransform(4, 5, 6) },
+        ],
+      });
+
+      await waitFor(() => room.state.transforms.size === 2);
+      expect(room.state.transforms.get("go-1")?.position.x).toBe(1);
+      expect(room.state.transforms.get("go-2")?.position.x).toBe(4);
+    });
+
+    it("hydrateScene è idempotente: non sovrascrive un gameObjectId già presente", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("hydrateScene", { gameObjects: [{ id: "go-1", transform: sampleTransform(1, 1, 1) }] });
+      await waitFor(() => room.state.transforms.size === 1);
+
+      // Un secondo hydrate con dati diversi per lo stesso id NON deve
+      // sovrascrivere: lo stato già nella Room resta la fonte di verità.
+      client.send("hydrateScene", { gameObjects: [{ id: "go-1", transform: sampleTransform(99, 99, 99) }] });
+      // Non c'è un evento osservabile da attendere per "non è successo
+      // nulla": una breve attesa fissa qui è accettabile perché il test
+      // verifica un NON-cambiamento, non un cambiamento (waitFor non si
+      // applicherebbe a un'assenza di evento).
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(room.state.transforms.get("go-1")?.position.x).toBe(1);
+    });
+
+    it("commitTransform aggiorna il Transform di un gameObjectId già hydratato", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("hydrateScene", { gameObjects: [{ id: "go-1", transform: sampleTransform(1, 1, 1) }] });
+      await waitFor(() => room.state.transforms.size === 1);
+
+      client.send("commitTransform", { gameObjectId: "go-1", transform: sampleTransform(7, 8, 9) });
+      await waitFor(() => room.state.transforms.get("go-1")?.position.x === 7);
+
+      expect(room.state.transforms.get("go-1")?.position.y).toBe(8);
+      expect(room.state.transforms.get("go-1")?.position.z).toBe(9);
+
+      const entries = readLoggedEntries(logPath);
+      expect(entries.some((entry) => (entry as { type: string }).type === "transform_committed")).toBe(true);
+    });
+
+    it("commitTransform su un gameObjectId sconosciuto viene ignorato", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("commitTransform", { gameObjectId: "go-inesistente", transform: sampleTransform() });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      expect(room.state.transforms.size).toBe(0);
+      const entries = readLoggedEntries(logPath);
+      expect(entries.some((entry) => (entry as { type: string }).type === "transform_committed")).toBe(false);
+    });
   });
 });
