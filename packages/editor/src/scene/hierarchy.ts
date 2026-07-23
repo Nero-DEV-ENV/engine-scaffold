@@ -54,6 +54,28 @@ export function buildHierarchy(roots: readonly GameObject[]): HierarchyNode[] {
 }
 
 /**
+ * Appiattisce l'albero Hierarchy in una lista pre-order di GameObject —
+ * usata da Fase 6B.client-1 (`network/collabClient.ts`) per costruire il
+ * payload di `hydrateScene` (un entry per GameObject, non un albero) e per
+ * risolvere un `gameObjectId` ricevuto dal server nel GameObject locale
+ * corrispondente. Costruita sopra `buildHierarchy` invece di camminare
+ * `Object3D.children` una seconda volta: un solo algoritmo di
+ * attraversamento della scena (chi conta come "riga Hierarchy"/GameObject
+ * reale), non due che potrebbero disallinearsi in futuro.
+ */
+export function flattenGameObjects(roots: readonly GameObject[]): GameObject[] {
+  const result: GameObject[] = [];
+  function visit(nodes: readonly HierarchyNode[]): void {
+    for (const node of nodes) {
+      result.push(node.gameObject);
+      visit(node.children);
+    }
+  }
+  visit(buildHierarchy(roots));
+  return result;
+}
+
+/**
  * Risale da un Object3D three.js (tipicamente il risultato di un
  * raycast hit sul Viewport, che colpisce sempre la Mesh figlia, mai il
  * GameObject stesso) al GameObject proprietario più vicino, camminando

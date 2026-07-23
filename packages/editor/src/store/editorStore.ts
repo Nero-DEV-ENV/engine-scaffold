@@ -14,8 +14,12 @@ import type { EditorSceneHandle } from "../scene/createEditorScene.js";
  * selezione da un listener di click sul canvas, che gira fuori da
  * qualunque albero React. `useSyncExternalStore` è nativo di React 18
  * (già dependency da Fase 4A): zero dipendenze nuove.
+ *
+ * Esportata da Fase 6B.client-1: network/collabClient.ts la riusa per
+ * connectionStore (stato di connessione Colyseus, a fasi/asincrono) invece
+ * di reimplementare lo stesso identico factory.
  */
-function createExternalStore<T>(initialValue: T) {
+export function createExternalStore<T>(initialValue: T) {
   let value = initialValue;
   const listeners = new Set<() => void>();
 

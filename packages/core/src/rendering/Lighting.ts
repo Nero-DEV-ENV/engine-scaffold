@@ -11,6 +11,19 @@ export interface BasicLightingOptions {
   keyLightIntensity?: number;
   /** Posizione della key light (non ha bersaglio esplicito: punta sempre verso l'origine del suo target, di default (0,0,0)). */
   keyLightPosition?: [number, number, number];
+  /**
+   * Fase 6B.client-1: id espliciti per i due GameObject luce, invece del
+   * `crypto.randomUUID()` di default (vedi GameObject.ts). Servono solo a
+   * `createEditorScene.ts` per dare alla scena demo un id STABILE e
+   * condiviso fra istanze diverse dell'editor (altrimenti due tab/utenti
+   * che aprono l'editor "a freddo" avrebbero luci con id casuali diversi,
+   * e il sync Colyseus — per gameObjectId — non le riconoscerebbe mai come
+   * lo stesso oggetto logico). Facoltativi e senza alcun effetto sui
+   * chiamanti esistenti (apps/playground/src/main.ts): omessi, il
+   * comportamento resta esattamente quello di sempre (id casuale).
+   */
+  ambientId?: string;
+  keyLightId?: string;
 }
 
 export interface BasicLighting {
@@ -20,7 +33,7 @@ export interface BasicLighting {
   keyLight: GameObject;
 }
 
-const DEFAULTS: Required<BasicLightingOptions> = {
+const DEFAULTS: Required<Omit<BasicLightingOptions, "ambientId" | "keyLightId">> = {
   ambientColor: 0xffffff,
   ambientIntensity: 0.6,
   keyLightColor: 0xffffff,
@@ -53,13 +66,13 @@ const DEFAULTS: Required<BasicLightingOptions> = {
 export function createBasicLighting(options: BasicLightingOptions = {}): BasicLighting {
   const opts = { ...DEFAULTS, ...options };
 
-  const ambient = new GameObject("AmbientLight");
+  const ambient = new GameObject("AmbientLight", options.ambientId);
   const ambientLight = ambient.addComponent(Light);
   ambientLight.kind = { kind: "ambient" };
   ambientLight.color = new THREE.Color(opts.ambientColor).getHex();
   ambientLight.intensity = opts.ambientIntensity;
 
-  const keyLight = new GameObject("KeyLight");
+  const keyLight = new GameObject("KeyLight", options.keyLightId);
   const keyLightComponent = keyLight.addComponent(Light);
   const [x, y, z] = opts.keyLightPosition;
   keyLightComponent.kind = { kind: "directional", position: { x, y, z } };

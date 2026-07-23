@@ -11,10 +11,12 @@ import {
   Physics,
   _resetPhysics,
 } from "@engine/core";
-import type { SceneData } from "@engine/core";
+import type { SceneData, TransformData } from "@engine/core";
+import { serializeTransform } from "@engine/core";
 import { findOwningGameObject } from "./hierarchy.js";
 import { loadSceneReplacingCurrent } from "./sceneLoad.js";
 import { selectionStore, sceneRootsStore, bumpTransformVersion } from "../store/editorStore.js";
+import { sendTransformCommit } from "../network/collabClient.js";
 
 /**
  * createEditorScene — bootstrap imperativo della scena three.js/@engine/core
@@ -115,7 +117,22 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
   const cameraController = new OrbitCameraController(camera, renderer.domElement);
   cameraController.setTarget(0, 0.5, 0);
 
-  const lighting = createBasicLighting();
+  // Fase 6B.client-1: id ESPLICITI e stabili per tutti e cinque i
+  // GameObject della scena demo (le due luci qui sotto + Ground/Cube/Sphere
+  // poco più in basso), invece del `crypto.randomUUID()` di default —
+  // scoperto un problema reale con uno smoke-test in due tab browser: due
+  // istanze fresche dell'editor generavano id casuali diversi per "lo
+  // stesso" Cube logico, quindi il sync Colyseus (keyed per gameObjectId)
+  // non li riconosceva mai come lo stesso oggetto — un client spostava il
+  // proprio, l'altro non vedeva nulla, finché non si allineavano gli id a
+  // mano con Save/Load. Con id fissi, due tab/utenti che aprono l'editor
+  // "a freddo" condividono già la stessa scena di base, senza passaggi
+  // manuali. Non riguarda una scena salvata/caricata (Save/Load preserva
+  // già l'id originale di ogni GameObject, vedi SceneSerializer.ts) né un
+  // futuro GameObject aggiunto in sessione (Fase 6C, che sincronizzerà
+  // anche l'aggiunta stessa, non solo il Transform) — solo il bootstrap
+  // demo hardcoded qui sotto.
+  const lighting = createBasicLighting({ ambientId: "demo-ambient-light", keyLightId: "demo-key-light" });
   scene.add(lighting.ambient._object3D, lighting.keyLight._object3D);
 
   // ---- Fisica (Fase 5C.1) ----------------------------------------------
@@ -138,20 +155,20 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
   // (deliverable di questa fase). MeshRenderer.shape "plane" è già
   // orizzontale di default (vedi MeshRenderer.ts), quindi la rotazione
   // correttiva che prima veniva applicata qui a mano non serve più.
-  const groundGO = new GameObject("Ground");
+  const groundGO = new GameObject("Ground", "demo-ground");
   const groundRenderer = groundGO.addComponent(MeshRenderer);
   groundRenderer.shape = { kind: "plane", width: 10, height: 10 };
   groundRenderer.color = 0x2f3237;
   scene.add(groundGO._object3D);
 
-  const cubeGO = new GameObject("Cube");
+  const cubeGO = new GameObject("Cube", "demo-cube");
   cubeGO.transform.setPosition(-1, 0.5, 0);
   const cubeRenderer = cubeGO.addComponent(MeshRenderer);
   cubeRenderer.shape = { kind: "box", size: { x: 1, y: 1, z: 1 } };
   cubeRenderer.color = 0x4f8ef7;
   scene.add(cubeGO._object3D);
 
-  const sphereGO = new GameObject("Sphere");
+  const sphereGO = new GameObject("Sphere", "demo-sphere");
   sphereGO.transform.setPosition(1, 0.5, 0);
   const sphereRenderer = sphereGO.addComponent(MeshRenderer);
   sphereRenderer.shape = { kind: "sphere", radius: 0.5 };
@@ -227,8 +244,24 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
   // proprietà definita con lo stesso pattern get/set-con-dispatch di tutte
   // le altre proprietà "-changed" dei Controls tre.js (verificato leggendo
   // TransformControls.js in node_modules, non assunto dal solo .d.ts).
+  //
+  // Fase 6B.client-1: stesso evento usato anche per inviare `commitTransform`
+  // a fine trascinamento (`event.value === false`), non ad ogni tick — il
+  // GameObject trascinato è sempre quello agganciato al gizmo, cioè
+  // `selectionStore.get()` (vedi updateGizmoTarget sopra: il gizmo segue
+  // sempre la selezione corrente). `sendTransformCommit` è no-op se non
+  // connessi a nessuna sessione, quindi questo non cambia alcun
+  // comportamento quando la feature non è attiva.
   transformControls.addEventListener("dragging-changed", (event) => {
-    cameraController.enabled = !(event.value as boolean);
+    const dragging = event.value as boolean;
+    cameraController.enabled = !dragging;
+    if (!dragging) {
+      const selected = selectionStore.get();
+      if (selected) {
+        const transformData: TransformData = serializeTransform(selected);
+        sendTransformCommit(selected.id, transformData);
+      }
+    }
   });
 
   // Bump del contatore ad ogni modifica del Transform trascinando il
