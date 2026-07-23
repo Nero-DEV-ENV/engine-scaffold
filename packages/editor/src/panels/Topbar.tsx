@@ -2,6 +2,7 @@ import { useState } from "react";
 import { serializeScene } from "@engine/core";
 import { sceneRootsStore, editorSceneHandleStore } from "../store/editorStore.js";
 import { saveScene, loadScene as loadPersistedScene } from "../persistence/ScenePersistence.js";
+import { connectionStore, connect, disconnect } from "../network/collabClient.js";
 
 type Status =
   | { kind: "idle" }
@@ -11,7 +12,8 @@ type Status =
   | { kind: "error"; message: string };
 
 /**
- * Topbar — bottoni Save/Load (Fase 5B.3, chiude la Fase 5B).
+ * Topbar — bottoni Save/Load (Fase 5B.3, chiude la Fase 5B) + bottone
+ * Connect/Disconnect (Fase 6B.client-1, editor collaborativo Colyseus).
  *
  * Save legge `sceneRootsStore.get()` (i roots correnti, stessa fonte di
  * verità già usata da Hierarchy.tsx) — non serve l'handle per salvare.
@@ -25,13 +27,21 @@ type Status =
  * sola presenza dell'handle come gate per entrambi i bottoni è corretto e
  * non richiede una sottoscrizione separata a `sceneRootsStore` qui — serve
  * solo `.get()` al momento del click, dentro `onSave`.
+ *
+ * Connect/Disconnect legge `connectionStore` (network/collabClient.ts):
+ * un solo bottone che alterna testo/azione in base allo stato
+ * (idle/error → "Connect", connecting → disabilitato, connected →
+ * "Disconnect"). Nessuna UI di sessione/presence qui (Fase 6B.client-2) —
+ * solo lo stato della connessione stessa, stesso stile piatto di Save/Load.
  */
 export function Topbar(): JSX.Element {
   const handle = editorSceneHandleStore.useValue();
   const [status, setStatus] = useState<Status>({ kind: "idle" });
+  const connection = connectionStore.useValue();
 
   const ready = handle !== null;
   const busy = status.kind === "busy";
+  const connecting = connection.status === "connecting";
 
   async function onSave(): Promise<void> {
     setStatus({ kind: "busy" });
@@ -67,6 +77,14 @@ export function Topbar(): JSX.Element {
     }
   }
 
+  async function onToggleConnection(): Promise<void> {
+    if (connection.status === "connected") {
+      await disconnect();
+    } else {
+      await connect();
+    }
+  }
+
   return (
     <header className="editor-topbar">
       <span className="editor-topbar-title">Engine Editor</span>
@@ -77,7 +95,20 @@ export function Topbar(): JSX.Element {
         <button type="button" className="topbar-button" disabled={!ready || busy} onClick={() => void onLoad()}>
           Load
         </button>
+        <button
+          type="button"
+          className="topbar-button"
+          disabled={connecting}
+          onClick={() => void onToggleConnection()}
+        >
+          {connection.status === "connected" ? "Disconnect" : connecting ? "Connecting…" : "Connect"}
+        </button>
       </div>
+      {connection.status === "error" && (
+        <span className="topbar-status topbar-status-error" role="alert">
+          {`Connessione fallita: ${connection.message}`}
+        </span>
+      )}
       {(status.kind === "success" || status.kind === "empty" || status.kind === "error") && (
         <span
           className={status.kind === "error" ? "topbar-status topbar-status-error" : "topbar-status"}

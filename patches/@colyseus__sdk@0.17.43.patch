@@ -1,0 +1,100 @@
+diff --git a/build/Connection.cjs b/build/Connection.cjs
+index b2b82b84d4734157aff80c2c6636adbec854abcc..47aa2911737b101f283aea1294a12d8dd4af48f1 100644
+--- a/build/Connection.cjs
++++ b/build/Connection.cjs
+@@ -33,7 +33,11 @@ class Connection {
+                 this.transport = new H3Transport.H3TransportTransport(this.events);
+                 break;
+             default:
+-                this.transport = new WebSocketTransport.WebSocketTransport(this.events);
++                if (protocol && Connection.customTransports[protocol]) {
++                    this.transport = new Connection.customTransports[protocol](this.events);
++                } else {
++                    this.transport = new WebSocketTransport.WebSocketTransport(this.events);
++                }
+                 break;
+         }
+     }
+@@ -76,6 +80,7 @@ class Connection {
+     }
+ }
+ _Connection__offlineListener = new WeakMap();
++Connection.customTransports = {};
+ 
+ exports.Connection = Connection;
+ //# sourceMappingURL=Connection.cjs.map
+diff --git a/build/Connection.d.ts b/build/Connection.d.ts
+index bf505a67893637c7a461bf12d4fccf4eceb4129c..14ef87fbdc47c107178a4eb2767a99d30f3680fc 100644
+--- a/build/Connection.d.ts
++++ b/build/Connection.d.ts
+@@ -1,10 +1,11 @@
+-import type { ITransport, ITransportEventMap } from "./transport/ITransport.ts";
++import type { ITransport, ITransportEventMap, ITransportConstructor } from "./transport/ITransport.ts";
+ export declare class Connection implements ITransport {
+     #private;
+     transport: ITransport;
+     events: ITransportEventMap;
+     url?: string;
+     options?: any;
++    static customTransports: Record<string, ITransportConstructor>;
+     constructor(protocol?: string);
+     connect(url: string, options?: any): void;
+     send(data: Buffer | Uint8Array): void;
+diff --git a/build/Connection.mjs b/build/Connection.mjs
+index 4f25a00691a65c51dd99e4a840d62d90e78f0408..224d3f9326751bb50929e14f09ed621e52ae43b4 100644
+--- a/build/Connection.mjs
++++ b/build/Connection.mjs
+@@ -26,13 +26,18 @@ class Connection {
+     url;
+     options;
+     #_offlineListener = (hasGlobalEventListeners) ? () => this.close(CloseCode.MAY_TRY_RECONNECT) : null;
++    static customTransports = {};
+     constructor(protocol) {
+         switch (protocol) {
+             case "h3":
+                 this.transport = new H3TransportTransport(this.events);
+                 break;
+             default:
+-                this.transport = new WebSocketTransport(this.events);
++                if (protocol && Connection.customTransports[protocol]) {
++                    this.transport = new Connection.customTransports[protocol](this.events);
++                } else {
++                    this.transport = new WebSocketTransport(this.events);
++                }
+                 break;
+         }
+     }
+diff --git a/src/Connection.ts b/src/Connection.ts
+index c983f89e749617b6a36c8d9d6a85f23c3c12cb70..8ced1c5857e1f9c9fb3a7291d955ac8612055210 100644
+--- a/src/Connection.ts
++++ b/src/Connection.ts
+@@ -25,6 +25,16 @@ export class Connection implements ITransport {
+ 
+     #_offlineListener = (hasGlobalEventListeners) ? () => this.close(CloseCode.MAY_TRY_RECONNECT) : null;
+ 
++    /**
++     * PATCH (engine-scaffold, packages/tunnel): the built-in switch only
++     * recognizes "h3" and falls back to WebSocketTransport for anything
++     * else. This registry lets application code plug in additional
++     * transports (e.g. a WebRTC DataChannel transport) by protocol name,
++     * without @colyseus/sdk needing to depend on that code and without
++     * forking this file beyond this narrow patch. See patches/@colyseus+sdk@0.17.43.patch.
++     */
++    static customTransports: Record<string, ITransportConstructor> = {};
++
+     constructor(protocol?: string) {
+         switch (protocol) {
+             case "h3":
+@@ -32,7 +42,11 @@ export class Connection implements ITransport {
+                 break;
+ 
+             default:
+-                this.transport = new WebSocketTransport(this.events);
++                if (protocol && Connection.customTransports[protocol]) {
++                    this.transport = new Connection.customTransports[protocol](this.events);
++                } else {
++                    this.transport = new WebSocketTransport(this.events);
++                }
+                 break;
+         }
+     }

@@ -35,7 +35,12 @@ export { initPhysics, setGravity, raycast, step as physicsStep, Physics, _resetP
 export type { InitPhysicsOptions, RaycastHit } from "./physics/Physics.js";
 
 // Fase 5 — serializzazione scene/prefab (JSON).
-export { serializeScene, deserializeScene } from "./serialization/SceneSerializer.js";
+export {
+  serializeScene,
+  deserializeScene,
+  serializeTransform,
+  applyTransformData,
+} from "./serialization/SceneSerializer.js";
 export type {
   SceneData,
   GameObjectData,

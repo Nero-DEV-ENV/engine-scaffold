@@ -12,7 +12,14 @@ const SCENE_FORMAT_VERSION = 1 as const;
 
 // ---- Serializzazione (runtime → dato) ----------------------------------
 
-function serializeTransform(go: GameObject): TransformData {
+/**
+ * Esportata da Fase 6B.client-1: il protocollo Colyseus lato editor
+ * (packages/editor/src/network/collabClient.ts) invia/riceve TransformData
+ * per singolo GameObject (non l'intero SceneData) — riusa questa
+ * conversione invece di duplicarla, così resta l'unica fonte di verità per
+ * "come si legge un Transform da un GameObject".
+ */
+export function serializeTransform(go: GameObject): TransformData {
   const p = go.transform.position;
   const r = go.transform.rotation;
   const s = go.transform.localScale;
@@ -107,7 +114,13 @@ export function serializeScene(roots: readonly GameObject[]): SceneData {
 
 // ---- Deserializzazione (dato → runtime) --------------------------------
 
-function applyTransformData(go: GameObject, data: TransformData): void {
+/**
+ * Esportata da Fase 6B.client-1 per lo stesso motivo di `serializeTransform`
+ * sopra: applicare un TransformData ricevuto dal server (commitTransform di
+ * un altro client, o l'hydrate iniziale) a un GameObject locale già
+ * esistente, senza duplicare la conversione qui e in packages/editor.
+ */
+export function applyTransformData(go: GameObject, data: TransformData): void {
   go.transform.position = new THREE.Vector3(data.position.x, data.position.y, data.position.z);
   go.transform.rotation = new THREE.Quaternion(data.rotation.x, data.rotation.y, data.rotation.z, data.rotation.w);
   go.transform.localScale = new THREE.Vector3(data.scale.x, data.scale.y, data.scale.z);

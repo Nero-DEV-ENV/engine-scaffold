@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildHierarchy, findOwningGameObject } from "./hierarchy.js";
+import { buildHierarchy, findOwningGameObject, flattenGameObjects } from "./hierarchy.js";
 import type { GameObject } from "@engine/core";
 import type * as THREE from "three";
 
@@ -93,6 +93,42 @@ describe("buildHierarchy", () => {
     const tree = buildHierarchy([ground, cube, sphere]);
 
     expect(tree.map((node) => node.gameObject.name)).toEqual(["Ground", "Cube", "Sphere"]);
+  });
+});
+
+describe("flattenGameObjects", () => {
+  it("appiattisce più radici indipendenti nell'ordine pre-order (scena demo piatta)", () => {
+    const ground = makeGameObject("Ground", makeObject3D());
+    const cube = makeGameObject("Cube", makeObject3D());
+    const sphere = makeGameObject("Sphere", makeObject3D());
+
+    expect(flattenGameObjects([ground, cube, sphere])).toEqual([ground, cube, sphere]);
+  });
+
+  it("appiattisce una gerarchia multi-livello in ordine pre-order (genitore prima dei figli)", () => {
+    const propsObject3D = makeObject3D();
+    const props = makeGameObject("Props", propsObject3D);
+    const cubeObject3D = makeObject3D();
+    const cube = makeGameObject("Cube", cubeObject3D);
+    attach(propsObject3D, cubeObject3D);
+
+    expect(flattenGameObjects([props])).toEqual([props, cube]);
+  });
+
+  it("salta gli Object3D 'nudi' (es. una Mesh) ma include i GameObject annidati più in profondità", () => {
+    const parentObject3D = makeObject3D();
+    const parent = makeGameObject("Parent", parentObject3D);
+    const nudeObject3D = makeObject3D();
+    attach(parentObject3D, nudeObject3D);
+    const childObject3D = makeObject3D();
+    const child = makeGameObject("Child", childObject3D);
+    attach(nudeObject3D, childObject3D);
+
+    expect(flattenGameObjects([parent])).toEqual([parent, child]);
+  });
+
+  it("restituisce un array vuoto per una lista di radici vuota", () => {
+    expect(flattenGameObjects([])).toEqual([]);
   });
 });
 
