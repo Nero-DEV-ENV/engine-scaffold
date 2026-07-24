@@ -22,6 +22,21 @@ export interface CommitTransformMessage {
   transform: TransformData;
 }
 
+/**
+ * beginEdit/endEdit — Fase 6B.client-2: lock ottimistico di editing,
+ * agganciato allo stesso hook `dragging-changed` che già invia
+ * `commitTransform` (vedi createEditorScene.ts). Stessa forma minima per
+ * entrambi (solo `gameObjectId`): la semantica del lock (chi vince, chi può
+ * rilasciarlo) vive in EditorRoom.ts, non qui.
+ */
+export interface BeginEditMessage {
+  gameObjectId: string;
+}
+
+export interface EndEditMessage {
+  gameObjectId: string;
+}
+
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
@@ -59,4 +74,18 @@ export function isHydrateSceneMessage(value: unknown): value is HydrateSceneMess
     const e = entry as Record<string, unknown>;
     return typeof e.id === "string" && e.id.length > 0 && isTransformData(e.transform);
   });
+}
+
+function hasNonEmptyGameObjectId(value: unknown): value is { gameObjectId: string } {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.gameObjectId === "string" && v.gameObjectId.length > 0;
+}
+
+export function isBeginEditMessage(value: unknown): value is BeginEditMessage {
+  return hasNonEmptyGameObjectId(value);
+}
+
+export function isEndEditMessage(value: unknown): value is EndEditMessage {
+  return hasNonEmptyGameObjectId(value);
 }

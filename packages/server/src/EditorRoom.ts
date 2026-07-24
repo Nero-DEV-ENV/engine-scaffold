@@ -1,7 +1,8 @@
 import { Room, type Client } from "colyseus";
 import { logActivity } from "./activityLog.js";
-import { EditorRoomState, toTransformState, applyTransformData } from "./schema/EditorRoomState.js";
-import { isCommitTransformMessage, isHydrateSceneMessage } from "./messages.js";
+import { EditorRoomState, ClientInfo, toTransformState, applyTransformData } from "./schema/EditorRoomState.js";
+import { isCommitTransformMessage, isHydrateSceneMessage, isBeginEditMessage, isEndEditMessage } from "./messages.js";
+import { resolveDisplayName, pickColor } from "./identity.js";
 
 /**
  * EditorRoom — Fase 6A (ciclo di vita) + 6B (stato Transform sincronizzato).
@@ -69,9 +70,56 @@ export class EditorRoom extends Room<{ state: EditorRoomState }> {
         timestamp: Date.now(),
       });
     });
+
+    // beginEdit/endEdit: lock ottimistico di editing (Fase 6B.client-2),
+    // inviato dallo stesso hook `dragging-changed` di createEditorScene.ts
+    // che già invia commitTransform (beginEdit a inizio drag, endEdit +
+    // commitTransform a fine drag). Nessun timeout: il rilascio è garantito
+    // dallo stesso evento che chiude il drag lato client, più la pulizia
+    // in onLeave sotto per il caso di disconnessione a metà drag.
+    //
+    // "Primo che arriva vince": se `gameObjectId` è già lockato da un
+    // sessionId diverso, la richiesta viene ignorata silenziosamente (come
+    // già fatto per un gameObjectId sconosciuto in commitTransform) — non
+    // c'è ancora un canale per segnalare un conflitto di intent al client.
+    this.onMessage("beginEdit", (client, message: unknown) => {
+      if (!isBeginEditMessage(message)) return;
+      const currentHolder = this.state.editingBy.get(message.gameObjectId);
+      if (currentHolder && currentHolder !== client.sessionId) return;
+      this.state.editingBy.set(message.gameObjectId, client.sessionId);
+    });
+
+    // Solo chi detiene il lock può rilasciarlo: un endEdit "in ritardo" da
+    // parte di un client che nel frattempo ha perso/non ha mai avuto il
+    // lock su quel gameObjectId non deve poter cancellare il lock
+    // eventualmente già preso da un altro client nel frattempo.
+    this.onMessage("endEdit", (client, message: unknown) => {
+      if (!isEndEditMessage(message)) return;
+      if (this.state.editingBy.get(message.gameObjectId) !== client.sessionId) return;
+      this.state.editingBy.delete(message.gameObjectId);
+    });
   }
 
-  override onJoin(client: Client): void {
+  // Identità leggera (Fase 6B.client-2): `options.displayName`, se fornito
+  // dal client, è quello scelto dall'utente stesso (owner della propria
+  // identità, coerente con Unreal Multi-User Editing) — sanificato e usato
+  // così com'è; solo in mancanza di un valore valido ricadiamo su un nome
+  // generato proceduralmente. Il colore invece è sempre e solo deciso qui
+  // (mai dal client), dalla palette fissa in identity.ts, evitando
+  // collisioni con i colori già in uso dai client già connessi quando
+  // possibile. Nessun account/persistenza: l'identità vive solo per la
+  // durata della connessione, ricreata da zero ad ogni join.
+  override onJoin(client: Client, options?: unknown): void {
+    const displayNameOption =
+      typeof options === "object" && options !== null
+        ? (options as Record<string, unknown>).displayName
+        : undefined;
+
+    const info = new ClientInfo();
+    info.name = resolveDisplayName(displayNameOption);
+    info.color = pickColor(new Set(Array.from(this.state.clients.values(), (c) => c.color)));
+    this.state.clients.set(client.sessionId, info);
+
     logActivity({
       type: "client_joined",
       roomId: this.roomId,
@@ -81,6 +129,23 @@ export class EditorRoom extends Room<{ state: EditorRoomState }> {
   }
 
   override onLeave(client: Client, code?: number): void {
+    this.state.clients.delete(client.sessionId);
+
+    // Pulizia di un editingBy orfano (deciso con l'utente, in scope per
+    // questa fase): se il client disconnesso aveva un lock di editing in
+    // corso su qualche gameObjectId (drag interrotto da una disconnessione
+    // improvvisa, senza un endEdit mai inviato), l'entry va rimossa qui —
+    // altrimenti resterebbe bloccata per tutti gli altri client per
+    // sempre. Raccogliamo prima le chiavi da rimuovere e cancelliamo dopo,
+    // invece di mutare `editingBy` durante l'iterazione del suo stesso
+    // `.entries()`.
+    const orphanedLocks = Array.from(this.state.editingBy.entries())
+      .filter(([, sessionId]) => sessionId === client.sessionId)
+      .map(([gameObjectId]) => gameObjectId);
+    for (const gameObjectId of orphanedLocks) {
+      this.state.editingBy.delete(gameObjectId);
+    }
+
     logActivity({
       type: "client_left",
       roomId: this.roomId,

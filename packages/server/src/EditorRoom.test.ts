@@ -143,4 +143,126 @@ describe("EditorRoom", () => {
       expect(entries.some((entry) => (entry as { type: string }).type === "transform_committed")).toBe(false);
     });
   });
+
+  describe("identità e presence (Fase 6B.client-2)", () => {
+    it("assegna il displayName fornito dal client", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room, { displayName: "Mario" });
+      await waitFor(() => room.state.clients.has(client.sessionId));
+
+      expect(room.state.clients.get(client.sessionId)?.name).toBe("Mario");
+    });
+
+    it("genera un nome procedurale quando il client non ne fornisce uno", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+      await waitFor(() => room.state.clients.has(client.sessionId));
+
+      const name = room.state.clients.get(client.sessionId)?.name;
+      expect(name).toBeTruthy();
+      expect(name).toMatch(/^\S+ \S+$/);
+    });
+
+    it("assegna colori diversi a due client connessi contemporaneamente", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const clientA = await testServer.connectTo(room);
+      await waitFor(() => room.state.clients.has(clientA.sessionId));
+      const clientB = await testServer.connectTo(room);
+      await waitFor(() => room.state.clients.has(clientB.sessionId));
+
+      const colorA = room.state.clients.get(clientA.sessionId)?.color;
+      const colorB = room.state.clients.get(clientB.sessionId)?.color;
+      expect(colorA).not.toBe(colorB);
+    });
+
+    it("rimuove il client da clients quando esce", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+      await waitFor(() => room.state.clients.has(client.sessionId));
+
+      await client.leave();
+      await waitFor(() => !room.state.clients.has(client.sessionId));
+      expect(room.state.clients.has(client.sessionId)).toBe(false);
+    });
+  });
+
+  describe("lock ottimistico beginEdit/endEdit (Fase 6B.client-2)", () => {
+    it("beginEdit registra il sessionId del client in editingBy", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("beginEdit", { gameObjectId: "go-1" });
+      await waitFor(() => room.state.editingBy.has("go-1"));
+
+      expect(room.state.editingBy.get("go-1")).toBe(client.sessionId);
+    });
+
+    it("un secondo client non può ottenere il lock su un gameObjectId già lockato da un altro", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const clientA = await testServer.connectTo(room);
+      const clientB = await testServer.connectTo(room);
+
+      clientA.send("beginEdit", { gameObjectId: "go-1" });
+      await waitFor(() => room.state.editingBy.has("go-1"));
+
+      clientB.send("beginEdit", { gameObjectId: "go-1" });
+      await new Promise((resolve) => setTimeout(resolve, 100)); // verifica un NON-cambiamento
+
+      expect(room.state.editingBy.get("go-1")).toBe(clientA.sessionId);
+    });
+
+    it("endEdit rilascia il lock quando richiesto da chi lo detiene", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("beginEdit", { gameObjectId: "go-1" });
+      await waitFor(() => room.state.editingBy.has("go-1"));
+
+      client.send("endEdit", { gameObjectId: "go-1" });
+      await waitFor(() => !room.state.editingBy.has("go-1"));
+
+      expect(room.state.editingBy.has("go-1")).toBe(false);
+    });
+
+    it("endEdit da parte di un client che non detiene il lock viene ignorato", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const clientA = await testServer.connectTo(room);
+      const clientB = await testServer.connectTo(room);
+
+      clientA.send("beginEdit", { gameObjectId: "go-1" });
+      await waitFor(() => room.state.editingBy.has("go-1"));
+
+      clientB.send("endEdit", { gameObjectId: "go-1" });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      expect(room.state.editingBy.get("go-1")).toBe(clientA.sessionId);
+    });
+
+    it("un editingBy orfano viene ripulito quando il client detentore si disconnette", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("beginEdit", { gameObjectId: "go-1" });
+      await waitFor(() => room.state.editingBy.has("go-1"));
+
+      await client.leave();
+      await waitFor(() => !room.state.editingBy.has("go-1"));
+
+      expect(room.state.editingBy.has("go-1")).toBe(false);
+    });
+
+    it("la disconnessione di un client non lockatario non tocca il lock di un altro client", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const clientA = await testServer.connectTo(room);
+      const clientB = await testServer.connectTo(room);
+
+      clientA.send("beginEdit", { gameObjectId: "go-1" });
+      await waitFor(() => room.state.editingBy.has("go-1"));
+
+      await clientB.leave();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      expect(room.state.editingBy.get("go-1")).toBe(clientA.sessionId);
+    });
+  });
 });

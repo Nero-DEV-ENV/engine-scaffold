@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
+import { CSS2DRenderer, CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import {
   Engine,
   GameObject,
@@ -13,10 +14,17 @@ import {
 } from "@engine/core";
 import type { SceneData, TransformData } from "@engine/core";
 import { serializeTransform } from "@engine/core";
-import { findOwningGameObject } from "./hierarchy.js";
+import { findOwningGameObject, flattenGameObjects } from "./hierarchy.js";
 import { loadSceneReplacingCurrent } from "./sceneLoad.js";
 import { selectionStore, sceneRootsStore, bumpTransformVersion } from "../store/editorStore.js";
-import { sendTransformCommit } from "../network/collabClient.js";
+import {
+  sendTransformCommit,
+  sendBeginEdit,
+  sendEndEdit,
+  editingByStore,
+  presenceStore,
+  mySessionIdStore,
+} from "../network/collabClient.js";
 
 /**
  * createEditorScene — bootstrap imperativo della scena three.js/@engine/core
@@ -107,6 +115,18 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
   const { renderer } = await createRenderer({ width, height });
   renderer.domElement.classList.add("viewport-canvas");
   container.appendChild(renderer.domElement);
+
+  // Fase 6B.client-2: CSS2DRenderer (addon three/examples/jsm, stesso
+  // pattern di TransformControls sopra — nessuna dipendenza nuova) per
+  // l'etichetta di testo SEMPRE visibile (colore+nome) su un oggetto
+  // lockato da un altro client — vedi lockVisuals/updateLockVisuals più
+  // sotto. `container` è già `position: relative` in App.css
+  // (.viewport-panel), quindi il layer assoluto del CSS2DRenderer si
+  // sovrappone correttamente al canvas WebGL sottostante.
+  const labelRenderer = new CSS2DRenderer();
+  labelRenderer.setSize(width, height);
+  labelRenderer.domElement.classList.add("viewport-labels");
+  container.appendChild(labelRenderer.domElement);
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x1b1d21);
@@ -222,8 +242,20 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
   // influenza il rendering, ma questo è già vero indipendentemente dal
   // gizmo — non un motivo per trattare le luci diversamente in questo
   // punto del codice.
+  // Fase 6B.client-2: un gameObjectId presente in editingByStore con un
+  // sessionId DIVERSO dal proprio è lockato da un altro client — il
+  // proprio gizmo non deve potersi agganciare a quell'oggetto (decisione
+  // presa con l'utente: "gli altri client... disabilitano il proprio
+  // gizmo su quell'oggetto"). Un lock con sessionId UGUALE al proprio è il
+  // proprio stesso lock (drag in corso), il gizmo deve restare agganciato
+  // normalmente.
+  function isLockedByOther(gameObjectId: string): boolean {
+    const holder = editingByStore.get().get(gameObjectId);
+    return holder !== undefined && holder !== mySessionIdStore.get();
+  }
+
   function updateGizmoTarget(selected: GameObject | null): void {
-    if (selected) {
+    if (selected && !isLockedByOther(selected.id)) {
       transformControls.attach(selected._object3D);
     } else {
       transformControls.detach();
@@ -232,6 +264,13 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
 
   updateGizmoTarget(selectionStore.get());
   const unsubscribeGizmoTarget = selectionStore.subscribe(() => {
+    updateGizmoTarget(selectionStore.get());
+  });
+  // Il lock può arrivare/sparire DOPO che l'oggetto è già selezionato
+  // localmente (un altro client inizia/finisce un drag sull'oggetto che ho
+  // selezionato io): ririsolvere il target del gizmo anche ad ogni cambio
+  // di editingByStore, non solo di selectionStore.
+  const unsubscribeGizmoLock = editingByStore.subscribe(() => {
     updateGizmoTarget(selectionStore.get());
   });
 
@@ -252,15 +291,26 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
   // sempre la selezione corrente). `sendTransformCommit` è no-op se non
   // connessi a nessuna sessione, quindi questo non cambia alcun
   // comportamento quando la feature non è attiva.
+  //
+  // Fase 6B.client-2: lo stesso evento invia anche `beginEdit`/`endEdit`
+  // per il lock ottimistico — `beginEdit` a inizio drag (`event.value ===
+  // true`), `endEdit` a fine drag insieme a `commitTransform` (stesso
+  // punto, stesso ordine delle decisioni prese con l'utente: il rilascio
+  // del lock è garantito dallo stesso evento che chiude il commit,
+  // nessun timeout). Non serve controllare qui se l'oggetto è lockato da
+  // un altro client: `updateGizmoTarget` (sopra) ha già scollegato il
+  // gizmo in quel caso, quindi questo evento non può scattare per un
+  // oggetto lockato da qualcun altro.
   transformControls.addEventListener("dragging-changed", (event) => {
     const dragging = event.value as boolean;
     cameraController.enabled = !dragging;
-    if (!dragging) {
-      const selected = selectionStore.get();
-      if (selected) {
-        const transformData: TransformData = serializeTransform(selected);
-        sendTransformCommit(selected.id, transformData);
-      }
+    const selected = selectionStore.get();
+    if (dragging) {
+      if (selected) sendBeginEdit(selected.id);
+    } else if (selected) {
+      const transformData: TransformData = serializeTransform(selected);
+      sendTransformCommit(selected.id, transformData);
+      sendEndEdit(selected.id);
     }
   });
 
@@ -348,6 +398,120 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
     updateHighlight(selectionStore.get());
   });
 
+  // ---- Highlight+etichetta per il lock di editing di un altro client ----
+  // (Fase 6B.client-2). Distinto dall'highlight di selezione sopra: un
+  // oggetto può essere selezionato E lockato da un altro client
+  // contemporaneamente (il gizmo in quel caso è già scollegato da
+  // updateGizmoTarget, ma l'highlight di selezione arancione resterebbe
+  // comunque visibile — non un conflitto, sono due indicatori con
+  // significati diversi: "cosa ho selezionato io" vs "chi sta editando
+  // cosa"). Colore+nome SEMPRE visibili (deciso con l'utente, non solo
+  // al hover) — l'etichetta usa CSS2DRenderer/CSS2DObject invece di un
+  // helper three.js nativo, perché serve testo leggibile a schermo, non
+  // solo geometria.
+
+  interface LockVisual {
+    readonly boxHelper: THREE.BoxHelper;
+    readonly label: CSS2DObject;
+    readonly labelDiv: HTMLDivElement;
+  }
+
+  const lockVisuals = new Map<string, LockVisual>();
+  const reusableLockBox = new THREE.Box3();
+
+  /** Posiziona l'etichetta sopra il bounding box world-space corrente dell'oggetto, ricalcolato ogni frame (vedi loop dell'Engine sotto). */
+  function updateLockLabelPosition(object3D: THREE.Object3D, label: CSS2DObject): void {
+    reusableLockBox.setFromObject(object3D);
+    if (reusableLockBox.isEmpty()) {
+      label.position.copy(object3D.position);
+      return;
+    }
+    label.position.set(
+      (reusableLockBox.min.x + reusableLockBox.max.x) / 2,
+      reusableLockBox.max.y + 0.3,
+      (reusableLockBox.min.z + reusableLockBox.max.z) / 2,
+    );
+  }
+
+  function removeLockVisual(gameObjectId: string): void {
+    const visual = lockVisuals.get(gameObjectId);
+    if (!visual) return;
+    scene.remove(visual.boxHelper);
+    visual.boxHelper.dispose();
+    scene.remove(visual.label);
+    visual.labelDiv.remove();
+    lockVisuals.delete(gameObjectId);
+  }
+
+  /**
+   * Ricalcola l'insieme di highlight+etichette da mostrare confrontando
+   * `editingByStore` (chi sta editando cosa) con `mySessionIdStore` (per
+   * escludere il proprio stesso lock — vedi isLockedByOther sopra) e
+   * `presenceStore` (per risolvere sessionId → nome+colore). Chiamata ad
+   * ogni cambio di uno qualunque dei tre store (subscription sotto), non
+   * solo al cambio di selezione: un lock può apparire/sparire per un
+   * qualunque gameObjectId indipendentemente da cosa ho selezionato io.
+   */
+  function updateLockVisuals(): void {
+    const editingBy = editingByStore.get();
+    const presence = presenceStore.get();
+    const mySessionId = mySessionIdStore.get();
+
+    const activeIds = new Set<string>();
+    for (const [gameObjectId, sessionId] of editingBy) {
+      if (sessionId === mySessionId) continue; // il proprio stesso lock non mostra highlight
+      const go = flattenGameObjects(roots).find((candidate) => candidate.id === gameObjectId) ?? null;
+      // gameObjectId sconosciuto localmente (scena diversa fra client,
+      // stesso limite già presente in collabClient.ts per i Transform —
+      // 6C non ancora arrivata) o senza geometria visibile: nessun
+      // highlight possibile/sensato, stesso criterio di updateHighlight.
+      if (!go || !hasVisibleGeometry(go._object3D)) continue;
+      const info = presence.get(sessionId);
+      // Presence non ancora arrivata per questo sessionId (race fra
+      // l'evento editingBy e l'evento clients — entrambi via Colyseus,
+      // ordine non garantito): salta per questo giro, si aggiornerà da
+      // solo al prossimo evento di uno dei due store.
+      if (!info) continue;
+
+      activeIds.add(gameObjectId);
+      let visual = lockVisuals.get(gameObjectId);
+      if (!visual) {
+        const boxHelper = new THREE.BoxHelper(go._object3D, new THREE.Color(info.color));
+        scene.add(boxHelper);
+        const labelDiv = document.createElement("div");
+        labelDiv.className = "lock-label";
+        const dot = document.createElement("span");
+        dot.className = "lock-label-dot";
+        dot.style.backgroundColor = info.color;
+        const nameSpan = document.createElement("span");
+        nameSpan.className = "lock-label-name";
+        nameSpan.textContent = info.name;
+        labelDiv.appendChild(dot);
+        labelDiv.appendChild(nameSpan);
+        const label = new CSS2DObject(labelDiv);
+        scene.add(label);
+        visual = { boxHelper, label, labelDiv };
+        lockVisuals.set(gameObjectId, visual);
+      } else {
+        // Il colore/nome di un client non cambia durante la sua
+        // connessione (assegnati una volta al join, vedi EditorRoom.ts) —
+        // ma se in futuro dovesse cambiare, questo tiene l'etichetta
+        // coerente invece di mostrare dati stale.
+        visual.boxHelper.material.color.set(info.color);
+        (visual.labelDiv.firstElementChild as HTMLElement).style.backgroundColor = info.color;
+        (visual.labelDiv.lastElementChild as HTMLElement).textContent = info.name;
+      }
+    }
+
+    for (const gameObjectId of Array.from(lockVisuals.keys())) {
+      if (!activeIds.has(gameObjectId)) removeLockVisual(gameObjectId);
+    }
+  }
+
+  updateLockVisuals();
+  const unsubscribeEditingByVisuals = editingByStore.subscribe(updateLockVisuals);
+  const unsubscribePresenceVisuals = presenceStore.subscribe(updateLockVisuals);
+
   const engine = new Engine(
     (dt) => {
       cameraController.update(dt);
@@ -357,7 +521,19 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
       // fermo alla posizione di quando è stato creato) senza questo update
       // per-frame.
       highlightHelper?.update();
+      // Fase 6B.client-2: stesso motivo per gli highlight+etichette di
+      // lock — l'oggetto lockato da un altro client riceve la sua nuova
+      // posizione solo al prossimo commitTransform (vedi collabClient.ts),
+      // ma quando arriva il box/etichetta devono seguirla senza attendere
+      // un ricalcolo esplicito da qui.
+      for (const [gameObjectId, visual] of lockVisuals) {
+        const go = flattenGameObjects(roots).find((candidate) => candidate.id === gameObjectId);
+        if (!go) continue;
+        visual.boxHelper.update();
+        updateLockLabelPosition(go._object3D, visual.label);
+      }
       renderer.render(scene, camera);
+      labelRenderer.render(scene, camera);
     },
     // Fase 5C.1 — stesso `Physics.step` passato da apps/playground/src/main.ts:
     // un RigidBody/Collider caricato in editor (oggi solo via Load, vedi il
@@ -392,6 +568,15 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
     // updateHighlight, sopra) reagiscono da sole, nessun'altra chiamata
     // esplicita necessaria qui.
     selectionStore.set(null);
+    // Fase 6B.client-2: a differenza di selectionStore, un editingByStore
+    // invariato NON ritrigghera da solo updateLockVisuals dopo un Load —
+    // ma i vecchi GameObject a cui un eventuale lock attivo puntava sono
+    // stati appena distrutti da loadSceneReplacingCurrent sopra. Ricalcolo
+    // esplicito: ririsolve ogni lock ancora attivo contro i NUOVI roots
+    // (stesso gameObjectId, nuova istanza, se la scena caricata lo
+    // contiene ancora) o lo rimuove (se non più presente), invece di
+    // lasciare box/etichette a puntare a Object3D ormai disposti.
+    updateLockVisuals();
   }
 
   function setSize(newWidth: number, newHeight: number): void {
@@ -403,6 +588,12 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
     // (width/height: 100%), non vogliamo che three.js sovrascriva lo
     // style inline con px assoluti ad ogni resize.
     renderer.setSize(newWidth, newHeight, false);
+    // CSS2DRenderer.setSize (Fase 6B.client-2) non tocca lo style del
+    // proprio domElement in modo incompatibile come renderer.setSize
+    // sopra: aggiorna solo le dimensioni interne usate per proiettare le
+    // coordinate 3D→schermo, il posizionamento (`.viewport-labels` in
+    // App.css) resta CSS puro (position:absolute; inset:0).
+    labelRenderer.setSize(newWidth, newHeight);
   }
 
   function dispose(): void {
@@ -411,6 +602,18 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
     renderer.domElement.removeEventListener("pointerup", onPointerUp);
     unsubscribeSelection();
     unsubscribeGizmoTarget();
+    unsubscribeGizmoLock();
+    unsubscribeEditingByVisuals();
+    unsubscribePresenceVisuals();
+    // Rimuove ogni highlight+etichetta di lock ancora attivo (Fase
+    // 6B.client-2) — stesso motivo di highlightHelper sotto: senza questa
+    // pulizia un rimontaggio del Viewport (HMR/StrictMode) lascerebbe
+    // BoxHelper/CSS2DObject orfani agganciati a GameObject già distrutti
+    // da Engine._resetAll() più sotto.
+    for (const gameObjectId of Array.from(lockVisuals.keys())) {
+      removeLockVisual(gameObjectId);
+    }
+    labelRenderer.domElement.remove();
     // detach() prima di dispose(): evita che TransformControls tenti di
     // continuare a leggere l'Object3D agganciato durante il proprio
     // teardown. controls.dispose() (ereditato dalla classe base astratta
