@@ -30,6 +30,19 @@ import type { TransformData } from "@engine/core";
  * `@engine/core` (position/rotation/scale, quaternion non euler — stessa
  * scelta e stessa motivazione di `packages/core/src/serialization/types.ts`)
  * per rendere diretta la conversione da/verso `SceneSerializer` in futuro.
+ *
+ * Fase 6B.client-2 aggiunge due campi, entrambi MapSchema per lo stesso
+ * motivo di `transforms` sopra (aggiungere/rimuovere un'entry è un
+ * `.set()`/`.delete()`, nessuna restrutturazione dello schema):
+ * - `clients`: identità leggera (nome+colore) di ogni client connesso,
+ *   keyed per sessionId — vedi `identity.ts` per come vengono generati.
+ * - `editingBy`: lock ottimistico di editing, keyed per `gameObjectId`, con
+ *   valore il sessionId del client che ha in corso un drag su
+ *   quell'oggetto (NON il colore/nome — quelli si risolvono lato client
+ *   da `clients.get(sessionId)`, per non duplicare l'identità in due
+ *   punti). MapSchema<string>: valore primitivo, non Schema annidato —
+ *   niente sottigliezza di onChange su sotto-istanze (vedi il commento
+ *   equivalente in collabClient.ts).
  */
 
 export class Vector3State extends Schema {
@@ -51,8 +64,16 @@ export class TransformState extends Schema {
   @type(Vector3State) scale = new Vector3State();
 }
 
+/** Identità leggera di un client connesso (Fase 6B.client-2): nome+colore, non persistente. */
+export class ClientInfo extends Schema {
+  @type("string") name = "";
+  @type("string") color = "";
+}
+
 export class EditorRoomState extends Schema {
   @type({ map: TransformState }) transforms = new MapSchema<TransformState>();
+  @type({ map: ClientInfo }) clients = new MapSchema<ClientInfo>();
+  @type({ map: "string" }) editingBy = new MapSchema<string>();
 }
 
 /** Costruisce una nuova TransformState da un TransformData (usato in hydrateScene). */

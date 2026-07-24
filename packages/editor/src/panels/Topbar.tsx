@@ -2,7 +2,7 @@ import { useState } from "react";
 import { serializeScene } from "@engine/core";
 import { sceneRootsStore, editorSceneHandleStore } from "../store/editorStore.js";
 import { saveScene, loadScene as loadPersistedScene } from "../persistence/ScenePersistence.js";
-import { connectionStore, connect, disconnect } from "../network/collabClient.js";
+import { connectionStore, connect, disconnect, presenceStore, mySessionIdStore } from "../network/collabClient.js";
 
 type Status =
   | { kind: "idle" }
@@ -31,17 +31,35 @@ type Status =
  * Connect/Disconnect legge `connectionStore` (network/collabClient.ts):
  * un solo bottone che alterna testo/azione in base allo stato
  * (idle/error → "Connect", connecting → disabilitato, connected →
- * "Disconnect"). Nessuna UI di sessione/presence qui (Fase 6B.client-2) —
- * solo lo stato della connessione stessa, stesso stile piatto di Save/Load.
+ * "Disconnect").
+ *
+ * Fase 6B.client-2 aggiunge:
+ * - Un campo di testo per il proprio nome (nome scelto dall'utente stesso —
+ *   "owner" della propria identità, coerente con Unreal Multi-User Editing
+ *   — deciso con l'utente al posto di un dialog/modal dedicato, pattern
+ *   assente in Topbar). Editabile solo PRIMA di connettersi: il nome è
+ *   inviato una volta sola come opzione di join (vedi `connect` in
+ *   collabClient.ts), cambiarlo dopo la connessione non avrebbe effetto
+ *   finché non ci si riconnette, quindi il campo si disabilita a
+ *   connessione avviata per non suggerire un comportamento che non esiste.
+ *   Vuoto è un valore valido: il server ricade sulla generazione
+ *   procedurale (vedi identity.ts lato server).
+ * - Striscia presence (pallino colore + nome per ogni client connesso,
+ *   incluso se stessi — marcato "(tu)" confrontando il sessionId con
+ *   `mySessionIdStore`), letta da `presenceStore`.
  */
 export function Topbar(): JSX.Element {
   const handle = editorSceneHandleStore.useValue();
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const connection = connectionStore.useValue();
+  const presence = presenceStore.useValue();
+  const mySessionId = mySessionIdStore.useValue();
+  const [displayNameInput, setDisplayNameInput] = useState("");
 
   const ready = handle !== null;
   const busy = status.kind === "busy";
   const connecting = connection.status === "connecting";
+  const nameInputDisabled = connecting || connection.status === "connected";
 
   async function onSave(): Promise<void> {
     setStatus({ kind: "busy" });
@@ -81,7 +99,8 @@ export function Topbar(): JSX.Element {
     if (connection.status === "connected") {
       await disconnect();
     } else {
-      await connect();
+      const trimmed = displayNameInput.trim();
+      await connect(trimmed.length > 0 ? trimmed : undefined);
     }
   }
 
@@ -95,6 +114,15 @@ export function Topbar(): JSX.Element {
         <button type="button" className="topbar-button" disabled={!ready || busy} onClick={() => void onLoad()}>
           Load
         </button>
+        <input
+          type="text"
+          className="topbar-name-input"
+          placeholder="Il tuo nome (opzionale)"
+          value={displayNameInput}
+          disabled={nameInputDisabled}
+          maxLength={24}
+          onChange={(event) => setDisplayNameInput(event.target.value)}
+        />
         <button
           type="button"
           className="topbar-button"
@@ -104,6 +132,17 @@ export function Topbar(): JSX.Element {
           {connection.status === "connected" ? "Disconnect" : connecting ? "Connecting…" : "Connect"}
         </button>
       </div>
+      {presence.size > 0 && (
+        <div className="topbar-presence" aria-label="Client connessi">
+          {Array.from(presence.entries()).map(([sessionId, info]) => (
+            <span key={sessionId} className="presence-chip">
+              <span className="presence-dot" style={{ backgroundColor: info.color }} />
+              {info.name}
+              {sessionId === mySessionId ? " (tu)" : ""}
+            </span>
+          ))}
+        </div>
+      )}
       {connection.status === "error" && (
         <span className="topbar-status topbar-status-error" role="alert">
           {`Connessione fallita: ${connection.message}`}
