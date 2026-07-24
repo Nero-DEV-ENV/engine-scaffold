@@ -3,16 +3,24 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "echo \"no tests yet\"",
+    "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "werift": "^0.23.0",
-    "@colyseus/sdk": "^0.17.43"
+    "@colyseus/sdk": "^0.17.43",
+    "ws": "^8.21.1"
   },
   "devDependencies": {
-    "vitest": "^2.1.9"
+    "vitest": "^2.1.9",
+    "@types/ws": "^8.5.13",
+    "colyseus": "^0.17.10",
+    "@colyseus/schema": "^4.0.7",
+    "@colyseus/testing": "^0.17.11",
+    "@colyseus/tools": "^0.17.19"
   }
 }
