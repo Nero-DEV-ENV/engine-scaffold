@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { serializeScene } from "@engine/core";
 import { sceneRootsStore, editorSceneHandleStore } from "../store/editorStore.js";
 import { saveScene, loadScene as loadPersistedScene } from "../persistence/ScenePersistence.js";
 import { connectionStore, connect, disconnect, presenceStore, mySessionIdStore } from "../network/collabClient.js";
+import { agentStateStore, ensureAgentMonitoring } from "../network/hostAgentClient.js";
+import { TunnelDialog, type TunnelDialogVariant } from "./TunnelDialog.js";
 
 type Status =
   | { kind: "idle" }
@@ -47,6 +49,21 @@ type Status =
  * - Striscia presence (pallino colore + nome per ogni client connesso,
  *   incluso se stessi — marcato "(tu)" confrontando il sessionId con
  *   `mySessionIdStore`), letta da `presenceStore`.
+ *
+ * Fase 6F.3.d aggiunge (decisione utente, punto aperto 3 — UNICA UI con
+ * scelta esplicita locale/LAN vs tunnel): un selettore di modalità
+ * accanto al bottone Connect/Disconnect. In modalità "Tunnel", cliccare
+ * il bottone (quando non già connessi) apre `TunnelDialog` variante
+ * "join" invece di chiamare `connect()` direttamente — è il dialog stesso
+ * a chiamare `connect()` con un `transportOverride` una volta stabilita
+ * la connessione WebRTC (vedi TunnelDialog.tsx). Una volta connessi
+ * (locale/LAN o tunnel, indistinguibile da qui), il bottone
+ * Disconnect/la striscia presence si comportano IDENTICI. Il bottone
+ * "Ospita" (indipendente dal selettore di modalità: l'host non si
+ * connette qui alla propria room, orchestrata dal dialog variante "host"
+ * verso host-agent) resta disabilitato finché `agentStateStore` non è
+ * "running" (decisione utente, Fase 6F.3.b DECISIONE 13 — il controllo è
+ * responsabilità della UI, non del backend).
  */
 export function Topbar(): JSX.Element {
   const handle = editorSceneHandleStore.useValue();
@@ -55,11 +72,24 @@ export function Topbar(): JSX.Element {
   const presence = presenceStore.useValue();
   const mySessionId = mySessionIdStore.useValue();
   const [displayNameInput, setDisplayNameInput] = useState("");
+  const [mode, setMode] = useState<"local" | "tunnel">("local");
+  const [dialogVariant, setDialogVariant] = useState<TunnelDialogVariant | null>(null);
+  const agentState = agentStateStore.useValue();
+
+  useEffect(() => {
+    // Idempotente (vedi hostAgentClient.ts) — ridondante con l'effect
+    // equivalente di HostAgentPanel.tsx quando entrambi sono montati (App.tsx
+    // li monta sempre insieme), ma tiene Topbar corretta anche se in futuro
+    // HostAgentPanel non fosse più montato incondizionatamente.
+    ensureAgentMonitoring();
+  }, []);
 
   const ready = handle !== null;
   const busy = status.kind === "busy";
   const connecting = connection.status === "connecting";
   const nameInputDisabled = connecting || connection.status === "connected";
+  const modeDisabled = nameInputDisabled;
+  const hostReady = agentState.status === "running";
 
   async function onSave(): Promise<void> {
     setStatus({ kind: "busy" });
@@ -98,10 +128,14 @@ export function Topbar(): JSX.Element {
   async function onToggleConnection(): Promise<void> {
     if (connection.status === "connected") {
       await disconnect();
-    } else {
-      const trimmed = displayNameInput.trim();
-      await connect(trimmed.length > 0 ? trimmed : undefined);
+      return;
     }
+    if (mode === "tunnel") {
+      setDialogVariant("join");
+      return;
+    }
+    const trimmed = displayNameInput.trim();
+    await connect(trimmed.length > 0 ? trimmed : undefined);
   }
 
   return (
@@ -123,6 +157,24 @@ export function Topbar(): JSX.Element {
           maxLength={24}
           onChange={(event) => setDisplayNameInput(event.target.value)}
         />
+        <div className="topbar-mode-toggle" role="group" aria-label="Modalità di connessione">
+          <button
+            type="button"
+            className={`topbar-mode-button${mode === "local" ? " topbar-mode-button-active" : ""}`}
+            disabled={modeDisabled}
+            onClick={() => setMode("local")}
+          >
+            Locale/LAN
+          </button>
+          <button
+            type="button"
+            className={`topbar-mode-button${mode === "tunnel" ? " topbar-mode-button-active" : ""}`}
+            disabled={modeDisabled}
+            onClick={() => setMode("tunnel")}
+          >
+            Tunnel
+          </button>
+        </div>
         <button
           type="button"
           className="topbar-button"
@@ -130,6 +182,15 @@ export function Topbar(): JSX.Element {
           onClick={() => void onToggleConnection()}
         >
           {connection.status === "connected" ? "Disconnect" : connecting ? "Connecting…" : "Connect"}
+        </button>
+        <button
+          type="button"
+          className="topbar-button"
+          disabled={!hostReady}
+          title={hostReady ? "" : "Richiede il server locale in esecuzione (vedi pannello \"Server locale\")"}
+          onClick={() => setDialogVariant("host")}
+        >
+          Ospita
         </button>
       </div>
       {presence.size > 0 && (
@@ -155,6 +216,13 @@ export function Topbar(): JSX.Element {
         >
           {status.kind === "empty" ? "Nessuna scena salvata." : status.message}
         </span>
+      )}
+      {dialogVariant !== null && (
+        <TunnelDialog
+          variant={dialogVariant}
+          displayName={displayNameInput.trim()}
+          onClose={() => setDialogVariant(null)}
+        />
       )}
     </header>
   );

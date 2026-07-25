@@ -1,5 +1,5 @@
 import { Client, getStateCallbacks } from "@colyseus/sdk";
-import type { Room } from "@colyseus/sdk";
+import type { Room, FetchFn } from "@colyseus/sdk";
 import type { TransformData } from "@engine/core";
 import { serializeTransform, applyTransformData } from "@engine/core";
 import { createExternalStore, sceneRootsStore, bumpTransformVersion } from "../store/editorStore.js";
@@ -13,7 +13,22 @@ import { flattenGameObjects } from "../scene/hierarchy.js";
  * server), presence (striscia di chi è connesso, mostrata da Topbar.tsx),
  * lock ottimistico beginEdit/endEdit (letto da createEditorScene.ts per
  * disabilitare il gizmo su un oggetto lockato da un altro client e per
- * mostrarne l'highlight+etichetta). NIENTE WebRTC qui (arriva in Fase 6F).
+ * mostrarne l'highlight+etichetta).
+ *
+ * Fase 6F.3.d (punto aperto 3, "rapporto con flusso esistente" — decisione
+ * utente: UNICA UI con scelta esplicita locale/LAN vs tunnel) aggiunge un
+ * `transportOverride` OPZIONALE a `connect()`: quando presente, sostituisce
+ * l'URL normale e inietta un `fetchFn` custom (quello tunnelato via WebRTC,
+ * vedi webrtcTransport.ts/tunnelGuest.ts) nel costruttore `Client` di
+ * @colyseus/sdk — verificato sui tipi reali della libreria che il
+ * costruttore accetta `(settings?: string | EndpointSettings, options?:
+ * ClientOptions)` con `ClientOptions.fetchFn?: FetchFn`. Il resto della
+ * funzione (hydrate, sync transform/presence/lock, room.onLeave/onError)
+ * resta IDENTICO indipendentemente dal transport: è la Room di
+ * @colyseus/sdk a differire internamente (WebSocket reale vs
+ * WebRTCTransport registrato in Connection.customTransports — vedi
+ * webrtcTransport.ts), non il codice qui. Questo evita di duplicare
+ * presence/lock/hydrate in un modulo parallelo per il guest-via-tunnel.
  *
  * Shape strutturale minima di un TransformState ricevuto dal server: NON
  * importiamo la classe reale (`packages/server/src/schema/EditorRoomState.ts`,
@@ -140,25 +155,52 @@ function buildHydratePayload(): { gameObjects: Array<{ id: string; transform: Tr
 }
 
 /**
+ * Override del transport per la connessione guest-via-tunnel (Fase
+ * 6F.3.d): `url` è un valore fittizio richiesto dal costruttore `Client`
+ * (la vera richiesta di matchmake passa dal `fetchFn` tunnelato, non da
+ * una vera connessione di rete a `url` — stesso pattern già documentato
+ * in webrtcTransport.ts, `"ws://tunnel.invalid"`), `fetchFn` è quello
+ * costruito da `createTunnelFetchFn()` in webrtcTransport.ts. IMPORTANTE:
+ * il chiamante deve aver già invocato `registerWebRTCTransport(channels)`
+ * PRIMA di passare questo override a `connect()` (registra la classe
+ * `WebRTCTransport` in `Connection.customTransports.webrtc`, letta da
+ * `Room.connect()` internamente in base al `protocol` che il fetchFn
+ * inietta nella risposta — vedi webrtcTransport.ts per i dettagli).
+ */
+export interface TunnelTransportOverride {
+  url: string;
+  fetchFn: FetchFn;
+}
+
+/**
  * Avvia la connessione a `editor_room`. No-op se già connessi/in
- * connessione. URL da `VITE_COLYSEUS_URL` con fallback a
- * `ws://localhost:2567` (punto 4 del documento di sessione — invariato
- * finché il tunnel di Fase 6F non è attivo).
+ * connessione.
+ *
+ * Senza `transportOverride`: URL da `VITE_COLYSEUS_URL` con fallback a
+ * `ws://localhost:2567` (connessione locale/LAN diretta, comportamento
+ * invariato da Fase 6B).
+ *
+ * Con `transportOverride` (Fase 6F.3.d, guest-via-tunnel): usa l'URL e il
+ * `fetchFn` forniti invece del normale URL locale/LAN — vedi JSDoc di
+ * `TunnelTransportOverride` sopra per i prerequisiti. Tutto il resto della
+ * funzione (hydrate, sync, presence, lock, error handling) resta
+ * invariato: è la Room di @colyseus/sdk a instradare i messaggi sul
+ * transport giusto internamente.
  *
  * `displayName` (Fase 6B.client-2, opzionale): il nome scelto dall'utente
  * nel campo di Topbar, inviato come opzione di join. Se assente/vuoto il
  * server ricade su un nome generato proceduralmente — questa funzione non
  * ha bisogno di saperlo, si limita a inoltrare quello che riceve.
  */
-export async function connect(displayName?: string): Promise<void> {
+export async function connect(displayName?: string, transportOverride?: TunnelTransportOverride): Promise<void> {
   const current = connectionStore.get().status;
   if (current === "connecting" || current === "connected") return;
   connectionStore.set({ status: "connecting" });
 
-  const url = import.meta.env.VITE_COLYSEUS_URL ?? DEFAULT_COLYSEUS_URL;
+  const url = transportOverride?.url ?? import.meta.env.VITE_COLYSEUS_URL ?? DEFAULT_COLYSEUS_URL;
 
   try {
-    const client = new Client(url);
+    const client = new Client(url, transportOverride ? { fetchFn: transportOverride.fetchFn } : undefined);
     const room = await client.joinOrCreate("editor_room", displayName ? { displayName } : {});
     activeRoom = room;
     mySessionIdStore.set(room.sessionId);
