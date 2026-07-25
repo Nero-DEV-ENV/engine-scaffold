@@ -1,6 +1,11 @@
 import { useEffect, useRef } from "react";
 import type { ChangeEvent } from "react";
-import { selectionStore, transformVersionStore, bumpTransformVersion } from "../store/editorStore.js";
+import {
+  selectionStore,
+  transformVersionStore,
+  bumpTransformVersion,
+  editorSceneHandleStore,
+} from "../store/editorStore.js";
 import { radToDeg, degToRad, roundForDisplay, parseNumericInput } from "./transformFields.js";
 
 /**
@@ -31,9 +36,18 @@ import { radToDeg, degToRad, roundForDisplay, parseNumericInput } from "./transf
  * asse mentre questo campo è a metà digitazione) sovrascriverebbe quello
  * che l'utente sta scrivendo — comportamento comune per campi numerici
  * bidirezionali sincronizzati con uno stato esterno mutabile.
+ *
+ * Fase 6C.1: bottone "Elimina" accanto al nome dell'oggetto, visibile solo
+ * quando c'è una selezione (coerente col resto del componente, che già
+ * ritorna presto se `selected` è null). Chiama
+ * `EditorSceneHandle.removeGameObject` (createEditorScene.ts) — resettare
+ * `selectionStore` a `null` non serve qui: lo fa già `removeGameObject`
+ * stesso quando l'oggetto rimosso è quello selezionato, che è sempre il
+ * caso da questo bottone. Nessun sync di rete ancora — arriva in 6C.2.
  */
 export function Inspector(): JSX.Element {
   const selected = selectionStore.useValue();
+  const handle = editorSceneHandleStore.useValue();
   transformVersionStore.useValue();
 
   if (!selected) {
@@ -81,10 +95,27 @@ export function Inspector(): JSX.Element {
     bumpTransformVersion();
   }
 
+  // Cattura `selected` (già narrowed a `GameObject` dal return precoce
+  // sopra) in una const separata: TypeScript non propaga il narrowing di
+  // una variabile esterna dentro una `function` annidata come `onDelete`
+  // sotto — stesso motivo per cui `const { transform } = selected` sopra
+  // esiste già, verificato dal typecheck reale (non assunto).
+  const selectedGameObject = selected;
+
+  function onDelete(): void {
+    if (!handle) return;
+    handle.removeGameObject(selectedGameObject);
+  }
+
   return (
     <div className="panel side-panel">
       <h2 className="panel-title">Inspector</h2>
-      <p className="inspector-object-name">{selected.name}</p>
+      <div className="inspector-header">
+        <p className="inspector-object-name">{selected.name}</p>
+        <button type="button" className="inspector-delete-button" disabled={!handle} onClick={onDelete}>
+          Elimina
+        </button>
+      </div>
       <Vector3Row title="Position" x={position.x} y={position.y} z={position.z} onChangeAxis={commitPosition} />
       <Vector3Row
         title="Rotation"

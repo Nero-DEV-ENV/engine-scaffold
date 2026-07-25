@@ -4,6 +4,7 @@ import { CSS2DRenderer, CSS2DObject } from "three/examples/jsm/renderers/CSS2DRe
 import {
   Engine,
   GameObject,
+  Destroy,
   MeshRenderer,
   createRenderer,
   createBasicLighting,
@@ -12,7 +13,7 @@ import {
   Physics,
   _resetPhysics,
 } from "@engine/core";
-import type { SceneData, TransformData } from "@engine/core";
+import type { SceneData, TransformData, MeshShape } from "@engine/core";
 import { serializeTransform } from "@engine/core";
 import { findOwningGameObject, flattenGameObjects } from "./hierarchy.js";
 import { loadSceneReplacingCurrent } from "./sceneLoad.js";
@@ -86,6 +87,33 @@ export interface EditorSceneHandle {
    * `selectionStore`).
    */
   loadScene(data: SceneData): void;
+  /**
+   * Fase 6C.1 — crea un nuovo GameObject radice e lo aggiunge alla scena
+   * viva (nessun sync di rete ancora, arriva in 6C.2): "empty" produce un
+   * GameObject senza componenti (stesso trattamento delle luci demo — niente
+   * highlight/raycast possibile, nessuna Mesh); "box"/"sphere"/"plane"
+   * aggiungono anche un MeshRenderer con una forma di default (vedi
+   * `shapeForKind` sotto). Il nuovo oggetto viene spawnato all'origine
+   * (0,0,0) e SUBITO selezionato (`selectionStore.set`), pronto per essere
+   * spostato col gizmo — stesso trattamento "auto-select" comune negli
+   * editor 3D dopo un'azione di creazione. `name`, se assente, ricade su un
+   * nome di default per kind (vedi `defaultNameForKind`); non c'è
+   * deduplicazione dei nomi, coerente col resto dell'editor (l'id, non il
+   * nome, è l'identificatore univoco di un GameObject).
+   */
+  addGameObject(kind: "empty" | "box" | "sphere" | "plane", name?: string): GameObject;
+  /**
+   * Fase 6C.1 — rimuove un GameObject dalla scena viva (nessun sync di rete
+   * ancora). Usa `Destroy()` di `@engine/core`: la rimozione dal grafo
+   * three.js è deferred a fine frame dal game loop dell'Engine (verificato
+   * in Scene.ts/Engine.ts — `_flushPendingDestroys()` gira ad ogni frame),
+   * quindi non serve alcuna chiamata esplicita a `scene.remove()` qui. Se
+   * `gameObject` è quello attualmente selezionato, la selezione viene
+   * resettata a `null` — questo fa scattare da sole le subscription già
+   * esistenti su `selectionStore` (gizmo/highlight, vedi sopra), nessun'altra
+   * pulizia da scrivere qui per quei due sistemi.
+   */
+  removeGameObject(gameObject: GameObject): void;
   /** Da chiamare ad ogni resize del container (via ResizeObserver, non window resize — vedi Viewport.tsx). */
   setSize(width: number, height: number): void;
   /** Ferma il loop, rilascia renderer/controls/listener e libera il registry globale dei GameObject (vedi Scene.ts). */
@@ -101,6 +129,39 @@ function hasVisibleGeometry(object3D: THREE.Object3D): boolean {
     if ((child as THREE.Mesh).isMesh) found = true;
   });
   return found;
+}
+
+/**
+ * Fase 6C.1 — forma di default per ciascuna primitiva creabile da
+ * `EditorSceneHandle.addGameObject`. Dimensioni scelte per essere
+ * ragionevoli fianco a fianco con la scena demo esistente (Cube 1×1×1 e
+ * Sphere raggio 0.5 in createEditorScene sopra usano gli stessi valori;
+ * Plane 1×1 deliberatamente più piccolo del Ground demo 10×10, per non
+ * essere confuso con un secondo pavimento).
+ */
+function shapeForKind(kind: "box" | "sphere" | "plane"): MeshShape {
+  switch (kind) {
+    case "box":
+      return { kind: "box", size: { x: 1, y: 1, z: 1 } };
+    case "sphere":
+      return { kind: "sphere", radius: 0.5 };
+    case "plane":
+      return { kind: "plane", width: 1, height: 1 };
+  }
+}
+
+/** Fase 6C.1 — nome di default assegnato da `addGameObject` quando il chiamante non ne fornisce uno esplicito. */
+function defaultNameForKind(kind: "empty" | "box" | "sphere" | "plane"): string {
+  switch (kind) {
+    case "empty":
+      return "GameObject";
+    case "box":
+      return "Cube";
+    case "sphere":
+      return "Sphere";
+    case "plane":
+      return "Plane";
+  }
 }
 
 export async function createEditorScene(container: HTMLElement): Promise<EditorSceneHandle> {
@@ -579,6 +640,49 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
     updateLockVisuals();
   }
 
+  /**
+   * Fase 6C.1 — vedi JSDoc su `EditorSceneHandle.addGameObject`. `roots =
+   * [...roots, go]` (nuovo array, non `.push()` in place) segue lo stesso
+   * stile immutabile già usato da `loadScene` sopra per `roots`/
+   * `rootObject3Ds`/`sceneRootsStore` — necessario perché
+   * `createExternalStore.set` (editorStore.ts) confronta con `Object.is` per
+   * decidere se notificare i sottoscrittori (Hierarchy.tsx in questo caso).
+   */
+  function addGameObject(kind: "empty" | "box" | "sphere" | "plane", name?: string): GameObject {
+    const go = new GameObject(name ?? defaultNameForKind(kind));
+    if (kind !== "empty") {
+      const renderer = go.addComponent(MeshRenderer);
+      renderer.shape = shapeForKind(kind);
+    }
+    scene.add(go._object3D);
+    roots = [...roots, go];
+    rootObject3Ds = roots.map((r) => r._object3D);
+    sceneRootsStore.set(roots);
+    selectionStore.set(go);
+    return go;
+  }
+
+  /**
+   * Fase 6C.1 — vedi JSDoc su `EditorSceneHandle.removeGameObject`.
+   * `Array.prototype.filter` restituisce SEMPRE un nuovo array (anche
+   * quando nessun elemento viene scartato, es. `gameObject` non è un root
+   * ma un figlio annidato di uno di essi — caso possibile con una scena
+   * caricata da Save/Load, che supporta `children`): il nuovo riferimento
+   * basta da solo a far ridisegnare Hierarchy via `sceneRootsStore.set`,
+   * nessun trucco aggiuntivo di "forza un nuovo array" necessario oltre a
+   * questo — verificato leggendo `Array.prototype.filter` (comportamento
+   * standard ECMAScript, non specifico di questo progetto).
+   */
+  function removeGameObject(gameObject: GameObject): void {
+    Destroy(gameObject);
+    roots = roots.filter((r) => r !== gameObject);
+    rootObject3Ds = roots.map((r) => r._object3D);
+    sceneRootsStore.set(roots);
+    if (selectionStore.get() === gameObject) {
+      selectionStore.set(null);
+    }
+  }
+
   function setSize(newWidth: number, newHeight: number): void {
     if (newWidth <= 0 || newHeight <= 0) return;
     camera.aspect = newWidth / newHeight;
@@ -651,5 +755,5 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
     _resetPhysics();
   }
 
-  return { engine, scene, camera, roots, loadScene, setSize, dispose };
+  return { engine, scene, camera, roots, loadScene, addGameObject, removeGameObject, setSize, dispose };
 }

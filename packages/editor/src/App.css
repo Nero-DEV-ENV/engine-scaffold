@@ -291,6 +291,77 @@ body {
   color: #7d828c;
 }
 
+/* Fase 6C.1 — header di Hierarchy con bottone "+"/menu Add, stesso motivo
+   di .inspector-header sotto: .panel-title da solo non lascia spazio a un
+   controllo accanto senza un contenitore flex dedicato. */
+.hierarchy-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.hierarchy-header .panel-title {
+  margin-bottom: 0;
+}
+
+.hierarchy-add {
+  position: relative;
+}
+
+.hierarchy-add-button {
+  width: 20px;
+  height: 20px;
+  line-height: 1;
+  border: 1px solid #4f8ef7;
+  background: #1b1d21;
+  color: #eaf1ff;
+  font: inherit;
+  font-size: 13px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.hierarchy-add-button:disabled {
+  border-color: #3a3d42;
+  color: #6c7078;
+  cursor: default;
+}
+
+.hierarchy-add-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 10;
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  min-width: 100px;
+  background: #1f2227;
+  border: 1px solid #2a2d32;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.hierarchy-add-option {
+  display: block;
+  width: 100%;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  color: #c7cad1;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.hierarchy-add-option:hover {
+  background: #234b7c;
+  color: #eaf1ff;
+}
+
 .panel-placeholder {
   margin: 0;
   font-size: 12px;
@@ -424,11 +495,42 @@ body {
   color: #eaf1ff;
 }
 
+/* Fase 6C.1 — contenitore flex per nome oggetto + bottone Elimina, stesso
+   motivo di .hierarchy-header sopra. */
+.inspector-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
 .inspector-object-name {
-  margin: 0 0 12px;
+  margin: 0;
   font-size: 13px;
   font-weight: 600;
   color: #eaf1ff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspector-delete-button {
+  flex: 0 0 auto;
+  border: 1px solid #d6486e;
+  background: #1b1d21;
+  color: #eaf1ff;
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.inspector-delete-button:disabled {
+  border-color: #3a3d42;
+  color: #6c7078;
+  cursor: default;
 }
 
 .inspector-row {
