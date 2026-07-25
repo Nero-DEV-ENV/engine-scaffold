@@ -345,3 +345,85 @@ body {
   outline: none;
   color: #eaf1ff;
 }
+
+/* Fase 6F.3.a — pannello "terminale interno" per il controllo manuale di
+   packages/server via @engine/host-agent (start-hidden.ps1). Vedi
+   panels/HostAgentPanel.tsx. */
+.host-agent-panel {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  max-height: 220px;
+  background: #1b1d21;
+  border-top: 1px solid #2a2d32;
+}
+
+.host-agent-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+}
+
+.host-agent-collapse-toggle {
+  border: none;
+  background: none;
+  color: #9aa0aa;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.host-agent-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #9fb8e8;
+}
+
+.host-agent-status {
+  font-size: 11px;
+  color: #9aa0aa;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-agent-status-running {
+  color: #5fd88a;
+}
+
+.host-agent-status-error {
+  color: #e0663f;
+}
+
+.host-agent-status-building,
+.host-agent-status-starting,
+.host-agent-status-stopping {
+  color: #e0c34f;
+}
+
+.host-agent-status-unreachable {
+  color: #6c7078;
+}
+
+.host-agent-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.host-agent-log {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 6px 10px 10px;
+  overflow-y: auto;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #c7cad1;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

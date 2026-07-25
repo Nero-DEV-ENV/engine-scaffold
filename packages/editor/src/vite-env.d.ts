@@ -10,6 +10,13 @@
  */
 interface ImportMetaEnv {
   readonly VITE_COLYSEUS_URL?: string;
+  /**
+   * Fase 6F.3.a — URL HTTP base di @engine/host-agent (packages/host-agent),
+   * il processo di controllo locale avviato una tantum tramite
+   * start-hidden.ps1. Fallback a `http://localhost:4100` quando non
+   * impostata. Vedi network/hostAgentClient.ts.
+   */
+  readonly VITE_HOST_AGENT_HTTP_URL?: string;
 }
 
 interface ImportMeta {
