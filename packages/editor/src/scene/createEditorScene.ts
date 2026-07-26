@@ -14,7 +14,7 @@ import {
   _resetPhysics,
 } from "@engine/core";
 import type { SceneData, TransformData, MeshShape } from "@engine/core";
-import { serializeTransform } from "@engine/core";
+import { serializeTransform, applyTransformData } from "@engine/core";
 import { findOwningGameObject, flattenGameObjects } from "./hierarchy.js";
 import { loadSceneReplacingCurrent } from "./sceneLoad.js";
 import { selectionStore, sceneRootsStore, bumpTransformVersion } from "../store/editorStore.js";
@@ -22,6 +22,8 @@ import {
   sendTransformCommit,
   sendBeginEdit,
   sendEndEdit,
+  sendAddGameObject,
+  sendRemoveGameObject,
   editingByStore,
   presenceStore,
   mySessionIdStore,
@@ -89,31 +91,67 @@ export interface EditorSceneHandle {
   loadScene(data: SceneData): void;
   /**
    * Fase 6C.1 — crea un nuovo GameObject radice e lo aggiunge alla scena
-   * viva (nessun sync di rete ancora, arriva in 6C.2): "empty" produce un
-   * GameObject senza componenti (stesso trattamento delle luci demo — niente
-   * highlight/raycast possibile, nessuna Mesh); "box"/"sphere"/"plane"
-   * aggiungono anche un MeshRenderer con una forma di default (vedi
-   * `shapeForKind` sotto). Il nuovo oggetto viene spawnato all'origine
-   * (0,0,0) e SUBITO selezionato (`selectionStore.set`), pronto per essere
-   * spostato col gizmo — stesso trattamento "auto-select" comune negli
-   * editor 3D dopo un'azione di creazione. `name`, se assente, ricade su un
-   * nome di default per kind (vedi `defaultNameForKind`); non c'è
-   * deduplicazione dei nomi, coerente col resto dell'editor (l'id, non il
-   * nome, è l'identificatore univoco di un GameObject).
+   * viva: "empty" produce un GameObject senza componenti (stesso
+   * trattamento delle luci demo — niente highlight/raycast possibile,
+   * nessuna Mesh); "box"/"sphere"/"plane" aggiungono anche un MeshRenderer
+   * con una forma di default (vedi `shapeForKind` sotto). `name`, se
+   * assente, ricade su un nome di default per kind (vedi
+   * `defaultNameForKind`); non c'è deduplicazione dei nomi, coerente col
+   * resto dell'editor (l'id, non il nome, è l'identificatore univoco di un
+   * GameObject).
+   *
+   * Fase 6C.2 estende la firma con `options`, tutti opzionali e retro-
+   * compatibili (una chiamata `addGameObject(kind)` da Hierarchy.tsx si
+   * comporta esattamente come prima):
+   * - `id`: id esplicito da assegnare (passato al costruttore di
+   *   `GameObject`, che lo accetta già come secondo parametro opzionale —
+   *   nessuna modifica al core necessaria). Se assente, `GameObject` genera
+   *   un `crypto.randomUUID()` come sempre. Usato dalla ricostruzione
+   *   remota (collabClient.ts) per assegnare lo STESSO id deciso dal client
+   *   creatore, così l'oggetto è riconosciuto come "lo stesso" da tutti i
+   *   client.
+   * - `transform`: se presente, applicato SUBITO dopo la creazione invece
+   *   di lasciare l'oggetto all'origine (0,0,0) — usato dalla ricostruzione
+   *   remota per posizionare l'oggetto dov'era quando è stato creato/
+   *   spostato dal client originario.
+   * - `select` (default `true`): se `false`, non seleziona l'oggetto appena
+   *   creato — usato dalla ricostruzione remota per non rubare la
+   *   selezione locale dell'utente quando arriva un oggetto creato da un
+   *   ALTRO client.
+   * - `broadcast` (default `true`): se `false`, non invia `addGameObject`
+   *   al server — usato dalla ricostruzione remota, per non ri-mandare al
+   *   server un oggetto che il server stesso ha appena broadcastato (vedi
+   *   collabClient.ts). Quando `true` (default, chiamata locale da
+   *   Hierarchy.tsx), il messaggio `addGameObject{id, kind, name,
+   *   transform}` viene inviato al server SUBITO dopo la creazione locale
+   *   ottimistica — no-op se non connessi (stesso pattern già usato da
+   *   `sendTransformCommit`).
    */
-  addGameObject(kind: "empty" | "box" | "sphere" | "plane", name?: string): GameObject;
+  addGameObject(
+    kind: "empty" | "box" | "sphere" | "plane",
+    name?: string,
+    options?: { id?: string; transform?: TransformData; select?: boolean; broadcast?: boolean },
+  ): GameObject;
   /**
-   * Fase 6C.1 — rimuove un GameObject dalla scena viva (nessun sync di rete
-   * ancora). Usa `Destroy()` di `@engine/core`: la rimozione dal grafo
-   * three.js è deferred a fine frame dal game loop dell'Engine (verificato
-   * in Scene.ts/Engine.ts — `_flushPendingDestroys()` gira ad ogni frame),
-   * quindi non serve alcuna chiamata esplicita a `scene.remove()` qui. Se
-   * `gameObject` è quello attualmente selezionato, la selezione viene
-   * resettata a `null` — questo fa scattare da sole le subscription già
-   * esistenti su `selectionStore` (gizmo/highlight, vedi sopra), nessun'altra
-   * pulizia da scrivere qui per quei due sistemi.
+   * Fase 6C.1 — rimuove un GameObject dalla scena viva. Usa `Destroy()` di
+   * `@engine/core`: la rimozione dal grafo three.js è deferred a fine frame
+   * dal game loop dell'Engine (verificato in Scene.ts/Engine.ts —
+   * `_flushPendingDestroys()` gira ad ogni frame), quindi non serve alcuna
+   * chiamata esplicita a `scene.remove()` qui. Se `gameObject` è quello
+   * attualmente selezionato, la selezione viene resettata a `null` — questo
+   * fa scattare da sole le subscription già esistenti su `selectionStore`
+   * (gizmo/highlight, vedi sopra), nessun'altra pulizia da scrivere qui per
+   * quei due sistemi.
+   *
+   * Fase 6C.2 estende la firma con `options.broadcast` (default `true`,
+   * stesso significato/scopo di `addGameObject` sopra): quando `true`
+   * (chiamata locale da Inspector.tsx), invia `removeGameObject
+   * {gameObjectId}` al server SUBITO DOPO la rimozione locale (l'id va letto
+   * PRIMA di `Destroy()`, non dopo). Quando `false`, usato dalla rimozione
+   * remota innescata da collabClient.ts alla ricezione di un
+   * `removeGameObject` broadcastato dal server.
    */
-  removeGameObject(gameObject: GameObject): void;
+  removeGameObject(gameObject: GameObject, options?: { broadcast?: boolean }): void;
   /** Da chiamare ad ogni resize del container (via ResizeObserver, non window resize — vedi Viewport.tsx). */
   setSize(width: number, height: number): void;
   /** Ferma il loop, rilascia renderer/controls/listener e libera il registry globale dei GameObject (vedi Scene.ts). */
@@ -648,17 +686,30 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
    * `createExternalStore.set` (editorStore.ts) confronta con `Object.is` per
    * decidere se notificare i sottoscrittori (Hierarchy.tsx in questo caso).
    */
-  function addGameObject(kind: "empty" | "box" | "sphere" | "plane", name?: string): GameObject {
-    const go = new GameObject(name ?? defaultNameForKind(kind));
+  function addGameObject(
+    kind: "empty" | "box" | "sphere" | "plane",
+    name?: string,
+    options?: { id?: string; transform?: TransformData; select?: boolean; broadcast?: boolean },
+  ): GameObject {
+    const { id, transform, select = true, broadcast = true } = options ?? {};
+    const go = new GameObject(name ?? defaultNameForKind(kind), id);
     if (kind !== "empty") {
       const renderer = go.addComponent(MeshRenderer);
       renderer.shape = shapeForKind(kind);
+    }
+    if (transform) {
+      applyTransformData(go, transform);
     }
     scene.add(go._object3D);
     roots = [...roots, go];
     rootObject3Ds = roots.map((r) => r._object3D);
     sceneRootsStore.set(roots);
-    selectionStore.set(go);
+    if (select) {
+      selectionStore.set(go);
+    }
+    if (broadcast) {
+      sendAddGameObject(go.id, kind, go.name, serializeTransform(go));
+    }
     return go;
   }
 
@@ -673,13 +724,18 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
    * questo — verificato leggendo `Array.prototype.filter` (comportamento
    * standard ECMAScript, non specifico di questo progetto).
    */
-  function removeGameObject(gameObject: GameObject): void {
+  function removeGameObject(gameObject: GameObject, options?: { broadcast?: boolean }): void {
+    const { broadcast = true } = options ?? {};
+    const id = gameObject.id; // letto PRIMA di Destroy(), serve per il messaggio dopo
     Destroy(gameObject);
     roots = roots.filter((r) => r !== gameObject);
     rootObject3Ds = roots.map((r) => r._object3D);
     sceneRootsStore.set(roots);
     if (selectionStore.get() === gameObject) {
       selectionStore.set(null);
+    }
+    if (broadcast) {
+      sendRemoveGameObject(id);
     }
   }
 

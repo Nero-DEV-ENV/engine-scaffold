@@ -1,13 +1,27 @@
 import { Room, type Client } from "colyseus";
 import { logActivity } from "./activityLog.js";
-import { EditorRoomState, ClientInfo, toTransformState, applyTransformData } from "./schema/EditorRoomState.js";
-import { isCommitTransformMessage, isHydrateSceneMessage, isBeginEditMessage, isEndEditMessage } from "./messages.js";
+import {
+  EditorRoomState,
+  ClientInfo,
+  toTransformState,
+  applyTransformData,
+  toGameObjectMetaState,
+} from "./schema/EditorRoomState.js";
+import {
+  isCommitTransformMessage,
+  isHydrateSceneMessage,
+  isBeginEditMessage,
+  isEndEditMessage,
+  isAddGameObjectMessage,
+  isRemoveGameObjectMessage,
+} from "./messages.js";
 import { resolveDisplayName, pickColor } from "./identity.js";
 
 /**
- * EditorRoom — Fase 6A (ciclo di vita) + 6B (stato Transform sincronizzato).
- * Nessuna aggiunta/rimozione di GameObject o componenti ancora — arriva in
- * 6C/6D.
+ * EditorRoom — Fase 6A (ciclo di vita) + 6B (stato Transform sincronizzato)
+ * + 6C.2 (sync aggiunta/rimozione GameObject). Aggiunta/rimozione/modifica
+ * di COMPONENTI su un GameObject già esistente resta fuori scope — arriva
+ * in 6D.
  *
  * Modello di autorità (punto 2): server-authoritative. In 6B questo si
  * traduce concretamente in: il client non muta mai `this.state` per conto
@@ -17,6 +31,32 @@ import { resolveDisplayName, pickColor } from "./identity.js";
  * a tutti i client connessi.
  */
 export class EditorRoom extends Room<{ state: EditorRoomState }> {
+  /**
+   * Fix Fase 6C.2 (scoperto con uno smoke-test reale, non anticipato dal
+   * design iniziale): id dei GameObject rimossi DEFINITIVAMENTE tramite
+   * `removeGameObject`, per tutta la vita di questa Room. Volutamente NON
+   * uno Schema/campo sincronizzato (i client non hanno bisogno di
+   * leggerlo) — serve solo qui, a `hydrateScene`, per distinguere "questo
+   * id non è mai stato nella scena condivisa" da "questo id c'era ma è
+   * stato rimosso apposta": senza questo Set, un client che si connette
+   * DOPO che un oggetto pre-esistente (hydratato, quindi con un id fisso
+   * hardcoded uguale in ogni client — es. "demo-cube") è stato rimosso da
+   * un altro client, lo re-inserirebbe in `transforms` con il proprio
+   * `hydrateScene` (che invia SEMPRE l'intera scena locale bootstrap,
+   * ignara della rimozione altrui), facendolo ricomparire per tutti.
+   * Volatile come il resto dello stato della Room (si azzera se la Room
+   * muore) — coerente con `transforms`/`editingBy`, nessuna persistenza su
+   * disco prevista finora.
+   *
+   * Un secondo problema, scoperto DOPO il primo smoke-test di questo fix,
+   * resta distinto da questo Set: impedire la resurrezione nello stato
+   * condiviso non dice al client richiedente di rimuovere la propria copia
+   * locale (bootstrap hardcoded, indipendente dalla rete) dell'oggetto —
+   * per quello vedi la risposta mirata `gameObjectsRemoved` nell'handler
+   * `hydrateScene` sotto.
+   */
+  private readonly removedGameObjectIds = new Set<string>();
+
   override onCreate(): void {
     this.setState(new EditorRoomState());
     logActivity({ type: "room_created", roomId: this.roomId, timestamp: Date.now() });
@@ -30,11 +70,19 @@ export class EditorRoom extends Room<{ state: EditorRoomState }> {
     // locale potenzialmente stale) di rimpiazzare uno stato già sincronizzato
     // nella sessione — "server-authoritative" si applica anche qui: una
     // volta che lo stato esiste nella Room, è quello la fonte di verità, non
-    // l'ultimo client che si connette.
+    // l'ultimo client che si connette. Salta anche qualunque id presente in
+    // `removedGameObjectIds` (vedi sopra), anche se non è (più) in
+    // `transforms` — altrimenti un hydrate successivo alla rimozione lo
+    // resusciterebbe.
     this.onMessage("hydrateScene", (client, message: unknown) => {
       if (!isHydrateSceneMessage(message)) return;
       let addedCount = 0;
+      const rejectedIds: string[] = [];
       for (const go of message.gameObjects) {
+        if (this.removedGameObjectIds.has(go.id)) {
+          rejectedIds.push(go.id);
+          continue;
+        }
         if (!this.state.transforms.has(go.id)) {
           this.state.transforms.set(go.id, toTransformState(go.transform));
           addedCount++;
@@ -48,6 +96,13 @@ export class EditorRoom extends Room<{ state: EditorRoomState }> {
           gameObjectCount: addedCount,
           timestamp: Date.now(),
         });
+      }
+      // Risposta MIRATA (solo a `client`, non broadcast): vedi JSDoc di
+      // GameObjectsRemovedMessage in messages.ts. Nessun invio se
+      // rejectedIds è vuoto — il caso comune (nessun oggetto rimosso da
+      // hydratare) non deve generare traffico extra.
+      if (rejectedIds.length > 0) {
+        client.send("gameObjectsRemoved", { gameObjectIds: rejectedIds });
       }
     });
 
@@ -97,6 +152,56 @@ export class EditorRoom extends Room<{ state: EditorRoomState }> {
       if (!isEndEditMessage(message)) return;
       if (this.state.editingBy.get(message.gameObjectId) !== client.sessionId) return;
       this.state.editingBy.delete(message.gameObjectId);
+    });
+
+    // addGameObject (Fase 6C.2): id generato dal client (ottimistico, stesso
+    // approccio già usato per gli id degli oggetti hydratati) — il server
+    // resta autoritativo perché rifiuta un id già presente in `transforms`
+    // (duplicato). `transforms` riceve il Transform iniziale, `gameObjectMeta`
+    // riceve kind+name: le due mappe sono sempre scritte insieme qui, così
+    // `transforms` resta l'unica fonte di verità su "questo GameObject esiste
+    // nella scena condivisa" sia per gli oggetti hydratati sia per quelli
+    // aggiunti a runtime (vedi EditorRoomState.ts).
+    this.onMessage("addGameObject", (client, message: unknown) => {
+      if (!isAddGameObjectMessage(message)) return;
+      if (this.state.transforms.has(message.id)) return;
+      this.state.transforms.set(message.id, toTransformState(message.transform));
+      this.state.gameObjectMeta.set(message.id, toGameObjectMetaState(message.kind, message.name));
+      logActivity({
+        type: "gameobject_added",
+        roomId: this.roomId,
+        sessionId: client.sessionId,
+        gameObjectId: message.id,
+        timestamp: Date.now(),
+      });
+    });
+
+    // removeGameObject (Fase 6C.2): un gameObjectId sconosciuto (mai
+    // hydratato/aggiunto, o già rimosso da un altro client nel frattempo)
+    // viene ignorato silenziosamente, stesso stile di commitTransform su un
+    // id sconosciuto. Un gameObjectId lockato da un ALTRO client blocca la
+    // rimozione (stesso pattern "richiesta ignorata silenziosamente" già
+    // usato da beginEdit per un conflitto di lock) — un client può comunque
+    // rimuovere un oggetto che ha lockato lui stesso. `gameObjectMeta.delete`
+    // è un no-op sicuro quando l'oggetto rimosso era pre-esistente (mai
+    // avuto un'entry lì) — verificato in EditorRoomState.test.ts.
+    // `editingBy.delete` è incondizionato per evitare lock orfani.
+    this.onMessage("removeGameObject", (client, message: unknown) => {
+      if (!isRemoveGameObjectMessage(message)) return;
+      if (!this.state.transforms.has(message.gameObjectId)) return;
+      const lockHolder = this.state.editingBy.get(message.gameObjectId);
+      if (lockHolder && lockHolder !== client.sessionId) return;
+      this.state.transforms.delete(message.gameObjectId);
+      this.state.gameObjectMeta.delete(message.gameObjectId);
+      this.state.editingBy.delete(message.gameObjectId);
+      this.removedGameObjectIds.add(message.gameObjectId);
+      logActivity({
+        type: "gameobject_removed",
+        roomId: this.roomId,
+        sessionId: client.sessionId,
+        gameObjectId: message.gameObjectId,
+        timestamp: Date.now(),
+      });
     });
   }
 

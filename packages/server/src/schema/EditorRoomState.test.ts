@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 import type { TransformData } from "@engine/core";
-import { EditorRoomState, TransformState, toTransformState, applyTransformData } from "./EditorRoomState.js";
+import {
+  EditorRoomState,
+  TransformState,
+  toTransformState,
+  applyTransformData,
+  toGameObjectMetaState,
+} from "./EditorRoomState.js";
 
 function sampleTransform(offset = 0): TransformData {
   return {
@@ -39,5 +45,33 @@ describe("EditorRoomState — schema Transform (Fase 6B)", () => {
     expect(roomState.transforms.has("go-1")).toBe(true);
     roomState.transforms.delete("go-1");
     expect(roomState.transforms.has("go-1")).toBe(false);
+  });
+});
+
+describe("EditorRoomState — gameObjectMeta (Fase 6C.2)", () => {
+  it("toGameObjectMetaState riporta correttamente kind e name", () => {
+    const state = toGameObjectMetaState("box", "Cube");
+    expect(state.kind).toBe("box");
+    expect(state.name).toBe("Cube");
+  });
+
+  it("EditorRoomState.gameObjectMeta è una MapSchema vuota all'inizializzazione", () => {
+    const roomState = new EditorRoomState();
+    expect(roomState.gameObjectMeta.size).toBe(0);
+  });
+
+  it("set/get/delete su gameObjectMeta funzionano per gameObjectId", () => {
+    const roomState = new EditorRoomState();
+    roomState.gameObjectMeta.set("go-1", toGameObjectMetaState("sphere", "Sphere"));
+    expect(roomState.gameObjectMeta.has("go-1")).toBe(true);
+    expect(roomState.gameObjectMeta.get("go-1")?.kind).toBe("sphere");
+    roomState.gameObjectMeta.delete("go-1");
+    expect(roomState.gameObjectMeta.has("go-1")).toBe(false);
+  });
+
+  it("delete su un gameObjectId mai presente in gameObjectMeta è un no-op sicuro (caso oggetto pre-esistente)", () => {
+    const roomState = new EditorRoomState();
+    expect(() => roomState.gameObjectMeta.delete("go-mai-esistito")).not.toThrow();
+    expect(roomState.gameObjectMeta.size).toBe(0);
   });
 });
