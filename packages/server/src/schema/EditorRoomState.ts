@@ -43,6 +43,19 @@ import type { TransformData } from "@engine/core";
  *   punti). MapSchema<string>: valore primitivo, non Schema annidato —
  *   niente sottigliezza di onChange su sotto-istanze (vedi il commento
  *   equivalente in collabClient.ts).
+ *
+ * Fase 6C.2 aggiunge `gameObjectMeta`: `transforms` resta l'UNICA fonte di
+ * verità su "questo GameObject esiste nella scena condivisa" (include sia
+ * gli oggetti hydratati all'avvio sia quelli aggiunti a runtime via
+ * `addGameObject`) — `gameObjectMeta` esiste SOLO per gli oggetti aggiunti a
+ * runtime (kind+name, il minimo per poterli ricreare su un client che non
+ * li ha ancora in locale); un oggetto hydratato via `hydrateScene` non ha
+ * un'entry qui, perché ogni client lo possiede già localmente dalla propria
+ * scena iniziale. `EditorRoom.ts` mantiene le due mappe in lockstep
+ * (`.set()`/`.delete()` sempre insieme in `addGameObject`/`removeGameObject`)
+ * — `gameObjectMeta.delete()` su un id senza entry (caso di un oggetto
+ * pre-esistente rimosso) è un no-op sicuro, verificato empiricamente in
+ * EditorRoomState.test.ts.
  */
 
 export class Vector3State extends Schema {
@@ -70,16 +83,42 @@ export class ClientInfo extends Schema {
   @type("string") color = "";
 }
 
+/**
+ * Metadato minimo di un GameObject aggiunto a runtime (Fase 6C.2): solo
+ * quanto serve a un client che non lo possiede ancora localmente per
+ * ricrearlo (vedi `EditorSceneHandle.addGameObject` in createEditorScene.ts,
+ * che accetta esattamente kind+name+id+transform). `kind` è "string" (non un
+ * literal union): @colyseus/schema non ha un modo nativo di vincolare un
+ * @type("string") a un set di valori — la validazione del kind avviene lato
+ * server in messages.ts PRIMA di scrivere qui, e lato client castando alla
+ * lettura (stesso compromesso già accettato altrove nel monorepo per i dati
+ * che attraversano un confine di rete/serializzazione, es. `MeshShape.kind`
+ * in @engine/core).
+ */
+export class GameObjectMetaState extends Schema {
+  @type("string") kind = "empty";
+  @type("string") name = "";
+}
+
 export class EditorRoomState extends Schema {
   @type({ map: TransformState }) transforms = new MapSchema<TransformState>();
   @type({ map: ClientInfo }) clients = new MapSchema<ClientInfo>();
   @type({ map: "string" }) editingBy = new MapSchema<string>();
+  @type({ map: GameObjectMetaState }) gameObjectMeta = new MapSchema<GameObjectMetaState>();
 }
 
 /** Costruisce una nuova TransformState da un TransformData (usato in hydrateScene). */
 export function toTransformState(data: TransformData): TransformState {
   const state = new TransformState();
   applyTransformData(state, data);
+  return state;
+}
+
+/** Costruisce una nuova GameObjectMetaState da kind+name (Fase 6C.2, usato in addGameObject). */
+export function toGameObjectMetaState(kind: string, name: string): GameObjectMetaState {
+  const state = new GameObjectMetaState();
+  state.kind = kind;
+  state.name = name;
   return state;
 }
 

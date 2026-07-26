@@ -265,4 +265,190 @@ describe("EditorRoom", () => {
       expect(room.state.editingBy.get("go-1")).toBe(clientA.sessionId);
     });
   });
+
+  describe("sync aggiunta/rimozione GameObject (Fase 6C.2)", () => {
+    it("addGameObject popola transforms e gameObjectMeta per il nuovo id", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("addGameObject", { id: "go-nuovo", kind: "box", name: "Cube", transform: sampleTransform(1, 2, 3) });
+      await waitFor(() => room.state.transforms.has("go-nuovo"));
+
+      expect(room.state.transforms.get("go-nuovo")?.position.x).toBe(1);
+      expect(room.state.gameObjectMeta.get("go-nuovo")?.kind).toBe("box");
+      expect(room.state.gameObjectMeta.get("go-nuovo")?.name).toBe("Cube");
+
+      const entries = readLoggedEntries(logPath);
+      expect(entries.some((entry) => (entry as { type: string }).type === "gameobject_added")).toBe(true);
+    });
+
+    it("addGameObject con un id già presente viene ignorato (duplicato)", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("addGameObject", { id: "go-1", kind: "box", name: "Cube", transform: sampleTransform(1, 1, 1) });
+      await waitFor(() => room.state.transforms.has("go-1"));
+
+      client.send("addGameObject", { id: "go-1", kind: "sphere", name: "Sphere", transform: sampleTransform(9, 9, 9) });
+      await new Promise((resolve) => setTimeout(resolve, 100)); // verifica un NON-cambiamento
+
+      expect(room.state.transforms.get("go-1")?.position.x).toBe(1);
+      expect(room.state.gameObjectMeta.get("go-1")?.kind).toBe("box");
+    });
+
+    it("removeGameObject rimuove l'entry da transforms e gameObjectMeta", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("addGameObject", { id: "go-1", kind: "box", name: "Cube", transform: sampleTransform() });
+      await waitFor(() => room.state.transforms.has("go-1"));
+
+      client.send("removeGameObject", { gameObjectId: "go-1" });
+      await waitFor(() => !room.state.transforms.has("go-1"));
+
+      expect(room.state.transforms.has("go-1")).toBe(false);
+      expect(room.state.gameObjectMeta.has("go-1")).toBe(false);
+
+      const entries = readLoggedEntries(logPath);
+      expect(entries.some((entry) => (entry as { type: string }).type === "gameobject_removed")).toBe(true);
+    });
+
+    it("removeGameObject su un id pre-esistente (hydratato, mai in gameObjectMeta) funziona comunque", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("hydrateScene", { gameObjects: [{ id: "go-demo", transform: sampleTransform() }] });
+      await waitFor(() => room.state.transforms.has("go-demo"));
+      expect(room.state.gameObjectMeta.has("go-demo")).toBe(false);
+
+      client.send("removeGameObject", { gameObjectId: "go-demo" });
+      await waitFor(() => !room.state.transforms.has("go-demo"));
+
+      expect(room.state.transforms.has("go-demo")).toBe(false);
+    });
+
+    it("removeGameObject su un gameObjectId sconosciuto viene ignorato", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("removeGameObject", { gameObjectId: "go-inesistente" });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      const entries = readLoggedEntries(logPath);
+      expect(entries.some((entry) => (entry as { type: string }).type === "gameobject_removed")).toBe(false);
+    });
+
+    it("removeGameObject è bloccato se il gameObjectId è lockato da un ALTRO client", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const clientA = await testServer.connectTo(room);
+      const clientB = await testServer.connectTo(room);
+
+      clientA.send("addGameObject", { id: "go-1", kind: "box", name: "Cube", transform: sampleTransform() });
+      await waitFor(() => room.state.transforms.has("go-1"));
+
+      clientA.send("beginEdit", { gameObjectId: "go-1" });
+      await waitFor(() => room.state.editingBy.has("go-1"));
+
+      clientB.send("removeGameObject", { gameObjectId: "go-1" });
+      await new Promise((resolve) => setTimeout(resolve, 100)); // verifica un NON-cambiamento
+
+      expect(room.state.transforms.has("go-1")).toBe(true);
+    });
+
+    it("removeGameObject riesce se il gameObjectId è lockato dallo STESSO client che lo rimuove", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("addGameObject", { id: "go-1", kind: "box", name: "Cube", transform: sampleTransform() });
+      await waitFor(() => room.state.transforms.has("go-1"));
+
+      client.send("beginEdit", { gameObjectId: "go-1" });
+      await waitFor(() => room.state.editingBy.has("go-1"));
+
+      client.send("removeGameObject", { gameObjectId: "go-1" });
+      await waitFor(() => !room.state.transforms.has("go-1"));
+
+      expect(room.state.transforms.has("go-1")).toBe(false);
+    });
+
+    it("removeGameObject ripulisce un editingBy associato, evitando lock orfani", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("addGameObject", { id: "go-1", kind: "box", name: "Cube", transform: sampleTransform() });
+      await waitFor(() => room.state.transforms.has("go-1"));
+
+      client.send("beginEdit", { gameObjectId: "go-1" });
+      await waitFor(() => room.state.editingBy.has("go-1"));
+
+      client.send("removeGameObject", { gameObjectId: "go-1" });
+      await waitFor(() => !room.state.transforms.has("go-1"));
+
+      expect(room.state.editingBy.has("go-1")).toBe(false);
+    });
+
+    it("hydrateScene NON resuscita un gameObjectId già rimosso (join tardivo, fix scoperto in smoke-test)", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const clientA = await testServer.connectTo(room);
+
+      // A hydrata un oggetto "pre-esistente" (id fisso, come demo-cube in ogni client) e poi lo rimuove.
+      clientA.send("hydrateScene", { gameObjects: [{ id: "demo-cube", transform: sampleTransform() }] });
+      await waitFor(() => room.state.transforms.has("demo-cube"));
+
+      clientA.send("removeGameObject", { gameObjectId: "demo-cube" });
+      await waitFor(() => !room.state.transforms.has("demo-cube"));
+
+      // Un client C, connesso DOPO la rimozione, hydrata la SUA copia locale
+      // dello stesso id (che possiede ancora, ignaro della rimozione altrui)
+      // — non deve ricomparire in transforms.
+      const clientC = await testServer.connectTo(room);
+      clientC.send("hydrateScene", { gameObjects: [{ id: "demo-cube", transform: sampleTransform(9, 9, 9) }] });
+      await new Promise((resolve) => setTimeout(resolve, 100)); // verifica un NON-cambiamento
+
+      expect(room.state.transforms.has("demo-cube")).toBe(false);
+    });
+
+    it("hydrateScene risponde con gameObjectsRemoved (mirato) al client che ha provato a hydratare un id già rimosso", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const clientA = await testServer.connectTo(room);
+
+      clientA.send("hydrateScene", { gameObjects: [{ id: "demo-cube", transform: sampleTransform() }] });
+      await waitFor(() => room.state.transforms.has("demo-cube"));
+
+      clientA.send("removeGameObject", { gameObjectId: "demo-cube" });
+      await waitFor(() => !room.state.transforms.has("demo-cube"));
+
+      const clientC = await testServer.connectTo(room);
+      const received = new Promise<{ gameObjectIds: string[] }>((resolve) => {
+        clientC.onMessage("gameObjectsRemoved", (payload: { gameObjectIds: string[] }) => resolve(payload));
+      });
+
+      // demo-sphere non è mai stato rimosso: deve restare fuori dalla risposta.
+      clientC.send("hydrateScene", {
+        gameObjects: [
+          { id: "demo-cube", transform: sampleTransform(9, 9, 9) },
+          { id: "demo-sphere", transform: sampleTransform() },
+        ],
+      });
+
+      const payload = await received;
+      expect(payload.gameObjectIds).toEqual(["demo-cube"]);
+    });
+
+    it("hydrateScene non invia gameObjectsRemoved quando non ci sono id scartati", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      let received = false;
+      client.onMessage("gameObjectsRemoved", () => {
+        received = true;
+      });
+
+      client.send("hydrateScene", { gameObjects: [{ id: "demo-cube", transform: sampleTransform() }] });
+      await waitFor(() => room.state.transforms.has("demo-cube"));
+      await new Promise((resolve) => setTimeout(resolve, 100)); // verifica un NON-invio
+
+      expect(received).toBe(false);
+    });
+  });
 });

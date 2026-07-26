@@ -2,7 +2,7 @@ import { Client, getStateCallbacks } from "@colyseus/sdk";
 import type { Room, FetchFn } from "@colyseus/sdk";
 import type { TransformData } from "@engine/core";
 import { serializeTransform, applyTransformData } from "@engine/core";
-import { createExternalStore, sceneRootsStore, bumpTransformVersion } from "../store/editorStore.js";
+import { createExternalStore, sceneRootsStore, editorSceneHandleStore, bumpTransformVersion } from "../store/editorStore.js";
 import { flattenGameObjects } from "../scene/hierarchy.js";
 
 /**
@@ -37,6 +37,15 @@ import { flattenGameObjects } from "../scene/hierarchy.js";
  * @colyseus/schema si basa su reflection (handshake), quindi un'istanza
  * ricevuta espone già `.position.x` ecc. senza che il client importi la
  * classe server-side. Qui serve solo la FORMA dei dati letti, non la classe.
+ *
+ * Fase 6C.2 aggiunge sync di aggiunta/rimozione GameObject: `transforms`
+ * resta l'unica fonte di verità su "questo GameObject esiste nella scena
+ * condivisa" (`transforms.onAdd`/`onRemove` guidano rispettivamente
+ * creazione e rimozione locale, tramite `ensureGameObjectExists` sotto);
+ * `gameObjectMeta` (kind+name) è un aiuto SOLO per la ricostruzione di un
+ * oggetto che il client non possiede ancora — vedi il JSDoc di
+ * `ensureGameObjectExists` per la verifica empirica sull'ordine di arrivo
+ * fra le due MapSchema.
  */
 interface TransformStateLike {
   position: { x: number; y: number; z: number };
@@ -48,6 +57,15 @@ interface TransformStateLike {
 export interface ClientInfoLike {
   name: string;
   color: string;
+}
+
+/** Le quattro primitive create/ricreabili da `EditorSceneHandle.addGameObject` (Fase 6C.1/6C.2). */
+export type GameObjectKind = "empty" | "box" | "sphere" | "plane";
+
+/** Shape strutturale minima di un GameObjectMeta ricevuto dal server (Fase 6C.2, stesso motivo di TransformStateLike sopra). */
+export interface GameObjectMetaLike {
+  kind: string;
+  name: string;
 }
 
 export type ConnectionState =
@@ -112,17 +130,82 @@ function resolveGameObjectById(gameObjectId: string) {
   return flattenGameObjects(sceneRootsStore.get()).find((go) => go.id === gameObjectId) ?? null;
 }
 
+const GAME_OBJECT_KINDS = new Set<GameObjectKind>(["empty", "box", "sphere", "plane"]);
+
+function isGameObjectKind(value: string): value is GameObjectKind {
+  return GAME_OBJECT_KINDS.has(value as GameObjectKind);
+}
+
+/**
+ * Ricrea localmente (Fase 6C.2) il GameObject `gameObjectId` se non esiste
+ * già in locale, leggendo `gameObjectMeta`/`transforms` DIRETTAMENTE da
+ * `room.state` (senza passare da `$()`, che serve solo a REGISTRARE
+ * callback, non a leggere il valore corrente). Chiamata da ENTRAMBI
+ * `transforms.onAdd` e `gameObjectMeta.onAdd` (che possono arrivare in
+ * qualunque ordine relativo nello stesso patch di rete — vedi sotto):
+ * essendo idempotente (esce subito se il GameObject esiste già, incluso il
+ * caso in cui sia stato appena creato in locale in modo ottimistico dal
+ * client stesso), il risultato non dipende da quale dei due onAdd scatta
+ * per primo.
+ *
+ * Lettura diretta di `room.state.transforms`/`room.state.gameObjectMeta`
+ * VERIFICATA empiricamente con un client @colyseus/sdk reale (non solo
+ * assunta): subito dopo la connessione questi campi sono `undefined` per
+ * una breve finestra (il primo sync completo dello stato non è istantaneo),
+ * MA una volta che un QUALUNQUE onAdd di QUALUNQUE mappa di `room.state` è
+ * scattato almeno una volta, l'intero `room.state` — inclusi i campi
+ * "fratelli" come `transforms` quando si è dentro `gameObjectMeta.onAdd`,
+ * o viceversa — è già popolato (lo stato arriva come un unico sync
+ * coerente, non campo per campo). Poiché questa funzione è chiamata SOLO
+ * da dentro un callback onAdd (mai subito dopo connect()), la lettura è
+ * sicura per costruzione.
+ *
+ * Se `gameObjectId` non ha un'entry in `gameObjectMeta`, l'oggetto è
+ * pre-esistente (hydratato all'avvio, già presente in ogni client dalla
+ * scena iniziale) — nessuna ricreazione necessaria, nessuna azione.
+ */
+function ensureGameObjectExists(gameObjectId: string): void {
+  if (resolveGameObjectById(gameObjectId)) return;
+  if (!activeRoom) return;
+  const meta = activeRoom.state.gameObjectMeta.get(gameObjectId) as GameObjectMetaLike | undefined;
+  if (!meta || !isGameObjectKind(meta.kind)) return;
+  const handle = editorSceneHandleStore.get();
+  if (!handle) return;
+  const transformState = activeRoom.state.transforms.get(gameObjectId) as TransformStateLike | undefined;
+  // `exactOptionalPropertyTypes: true` (tsconfig.base.json) rifiuta
+  // `transform: undefined` esplicito — la chiave va omessa del tutto
+  // quando non c'è un TransformState, non passata con valore undefined.
+  const addOptions: { id: string; select: false; broadcast: false; transform?: TransformData } = transformState
+    ? {
+        id: gameObjectId,
+        select: false,
+        broadcast: false,
+        transform: {
+          position: { x: transformState.position.x, y: transformState.position.y, z: transformState.position.z },
+          rotation: {
+            x: transformState.rotation.x,
+            y: transformState.rotation.y,
+            z: transformState.rotation.z,
+            w: transformState.rotation.w,
+          },
+          scale: { x: transformState.scale.x, y: transformState.scale.y, z: transformState.scale.z },
+        },
+      }
+    : { id: gameObjectId, select: false, broadcast: false };
+  handle.addGameObject(meta.kind, meta.name, addOptions);
+}
+
 /**
  * Applica un TransformState ricevuto dal server (hydrate iniziale, o
  * commitTransform di un altro client) al GameObject locale corrispondente.
- * Ignora silenziosamente un gameObjectId non presente nella scena locale:
- * per 6B.client-1 non c'è ancora sync di aggiunta/rimozione GameObject
- * (Fase 6C) — un client con una scena diversa da un altro può quindi
- * ricevere un id che non ha localmente, e non c'è ancora un modo corretto
- * di gestirlo (crearlo al volo richiederebbe conoscerne nome/componenti,
- * fuori scope qui).
+ * Ignora silenziosamente un gameObjectId non presente nella scena locale
+ * DOPO aver tentato `ensureGameObjectExists` (Fase 6C.2) — un gameObjectId
+ * ancora sconosciuto a quel punto è un limite residuo noto (es. scene
+ * locali divergenti in modi che 6C.2 non copre) e resta ignorato come
+ * prima.
  */
 function applyIncomingTransform(gameObjectId: string, transformState: TransformStateLike): void {
+  ensureGameObjectExists(gameObjectId);
   const go = resolveGameObjectById(gameObjectId);
   if (!go) return;
   const data: TransformData = {
@@ -229,6 +312,38 @@ export async function connect(displayName?: string, transportOverride?: TunnelTr
     );
     detachFns.push(detachTransformsOnAdd);
 
+    // Rimozione (Fase 6C.2): `transforms` è l'unica fonte di verità su
+    // "questo GameObject esiste nella scena condivisa" (vedi
+    // EditorRoomState.ts), quindi `transforms.onRemove` è il trigger
+    // corretto per la rimozione locale — copre SIA gli oggetti pre-esistenti
+    // (hydratati) SIA quelli aggiunti a runtime, senza dover distinguere i
+    // due casi qui. Ignora silenziosamente un id non trovato in locale
+    // (stesso stile di applyIncomingTransform).
+    const detachTransformsOnRemove = $(room.state).transforms!.onRemove((_transformState: TransformStateLike, gameObjectId: string) => {
+      const handle = editorSceneHandleStore.get();
+      const go = resolveGameObjectById(gameObjectId);
+      if (!handle || !go) return;
+      handle.removeGameObject(go, { broadcast: false });
+    });
+    detachFns.push(detachTransformsOnRemove);
+
+    // gameObjectMeta (Fase 6C.2): NON è il trigger di creazione principale
+    // (quello resta `transforms.onAdd` sopra, tramite applyIncomingTransform
+    // → ensureGameObjectExists) — serve solo a coprire il caso in cui
+    // `gameObjectMeta.onAdd` scatti PRIMA di `transforms.onAdd` per lo
+    // stesso id (l'ordine relativo fra le due mappe non è garantito, vedi
+    // JSDoc di ensureGameObjectExists sopra): chiamando la stessa funzione
+    // idempotente da entrambi i punti, il risultato non dipende da quale
+    // dei due arriva per primo. Nessun `onRemove` qui: la rimozione è
+    // gestita una sola volta, da `transforms.onRemove` sopra.
+    const detachGameObjectMetaOnAdd = $(room.state).gameObjectMeta!.onAdd(
+      (_meta: GameObjectMetaLike, gameObjectId: string) => {
+        ensureGameObjectExists(gameObjectId);
+      },
+      true,
+    );
+    detachFns.push(detachGameObjectMetaOnAdd);
+
     // Presence (Fase 6B.client-2): a differenza di `transforms`, i valori
     // di `clients` (ClientInfo: name+color) non vengono mai mutati in place
     // dopo l'assegnazione al join — non serve quindi alcun onChange nested
@@ -278,6 +393,28 @@ export async function connect(displayName?: string, transportOverride?: TunnelTr
       connectionStore.set({ status: "error", message: message ?? "Errore di connessione sconosciuto" });
     });
 
+    // gameObjectsRemoved (Fase 6C.2, fix): risposta MIRATA del server al
+    // proprio hydrateScene (vedi JSDoc del messaggio in
+    // packages/server/src/messages.ts) — elenca gli id che questo client ha
+    // provato a hydratare ma che il server ha scartato perché già rimossi
+    // definitivamente da qualcun altro PRIMA che questo client si
+    // connettesse. Senza questo handler, la copia locale (bootstrap
+    // hardcoded, indipendente dalla rete) di quell'oggetto resterebbe
+    // visibile per sempre, perché non c'è mai stata una transizione
+    // presente→assente da osservare dopo la connessione (unico caso che
+    // `transforms.onRemove` sa gestire).
+    const detachGameObjectsRemoved = room.onMessage("gameObjectsRemoved", (payload: { gameObjectIds: string[] }) => {
+      const handle = editorSceneHandleStore.get();
+      if (!handle) return;
+      for (const gameObjectId of payload.gameObjectIds) {
+        const go = resolveGameObjectById(gameObjectId);
+        if (go) {
+          handle.removeGameObject(go, { broadcast: false });
+        }
+      }
+    });
+    detachFns.push(detachGameObjectsRemoved);
+
     room.send("hydrateScene", buildHydratePayload());
     connectionStore.set({ status: "connected" });
   } catch (error) {
@@ -313,6 +450,27 @@ export async function disconnect(): Promise<void> {
 export function sendTransformCommit(gameObjectId: string, transform: TransformData): void {
   if (!activeRoom || connectionStore.get().status !== "connected") return;
   activeRoom.send("commitTransform", { gameObjectId, transform });
+}
+
+/**
+ * Invia un addGameObject al server (Fase 6C.2) — no-op se non connessi.
+ * Da chiamare da `EditorSceneHandle.addGameObject` (createEditorScene.ts)
+ * SUBITO dopo la creazione locale ottimistica, con `broadcast: true`
+ * (default) — mai per la ricostruzione remota di un oggetto già arrivato
+ * dal server (quella chiamata usa `broadcast: false`).
+ */
+export function sendAddGameObject(id: string, kind: GameObjectKind, name: string, transform: TransformData): void {
+  if (!activeRoom || connectionStore.get().status !== "connected") return;
+  activeRoom.send("addGameObject", { id, kind, name, transform });
+}
+
+/**
+ * Invia un removeGameObject al server (Fase 6C.2) — no-op se non connessi.
+ * Stesso discorso di `sendAddGameObject` sopra per `broadcast`.
+ */
+export function sendRemoveGameObject(gameObjectId: string): void {
+  if (!activeRoom || connectionStore.get().status !== "connected") return;
+  activeRoom.send("removeGameObject", { gameObjectId });
 }
 
 /**
