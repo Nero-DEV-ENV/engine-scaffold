@@ -49,6 +49,23 @@ describe("SceneSerializer", () => {
     expect(restored!.active).toBe(false);
   });
 
+  it("un GameObject senza sourceAssetId non include il campo nel dato serializzato (Fase 7)", () => {
+    const go = new GameObject("Cubo normale");
+    const data = throughJSON(serializeScene([go]));
+    expect(data.roots[0]!.sourceAssetId).toBeUndefined();
+  });
+
+  it("round-trip: sourceAssetId sopravvive a serializzazione+deserializzazione (Fase 7)", () => {
+    const go = new GameObject("Albero importato");
+    go.sourceAssetId = "asset-123";
+
+    const data = throughJSON(serializeScene([go]));
+    expect(data.roots[0]!.sourceAssetId).toBe("asset-123");
+
+    const [restored] = deserializeScene(data);
+    expect(restored!.sourceAssetId).toBe("asset-123");
+  });
+
   it("round-trip: la gerarchia parent/children è preservata", () => {
     const parent = new GameObject("Props");
     const childA = new GameObject("A");

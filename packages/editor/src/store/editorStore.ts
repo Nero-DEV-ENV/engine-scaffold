@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import type { GameObject } from "@engine/core";
 import type { EditorSceneHandle } from "../scene/createEditorScene.js";
+import type { AssetMeta } from "../persistence/AssetPersistence.js";
 
 /**
  * editorStore.ts — store esterno minimale condiviso fra codice
@@ -86,3 +87,13 @@ export const transformVersionStore = createExternalStore<number>(0);
 export function bumpTransformVersion(): void {
   transformVersionStore.set(transformVersionStore.get() + 1);
 }
+
+/**
+ * Fase 7 — metadati (senza payload binario, vedi AssetPersistence.ts) di
+ * tutti gli asset importati correnti. Popolato da
+ * `assets/assetsController.ts` (import/refresh/rimozione), letto da
+ * AssetsPanel.tsx — stesso motivo di `sceneRootsStore` sopra: nessun
+ * antenato React comune fra il controller (chiamato anche da fuori React,
+ * es. al bootstrap del Viewport) e il pannello.
+ */
+export const assetsStore = createExternalStore<readonly AssetMeta[]>([]);

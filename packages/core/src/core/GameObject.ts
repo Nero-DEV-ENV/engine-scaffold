@@ -30,6 +30,19 @@ export class GameObject {
 
   readonly transform: Transform;
 
+  /**
+   * Fase 7 — id nell'asset store dell'editor del modello GLTF/GLB da cui
+   * questo GameObject è stato istanziato, o `null` per ogni GameObject
+   * "normale" (creato con `addComponent(MeshRenderer)`/primitive, non da
+   * import). Letto da `SceneSerializer.serializeGameObject` e scritto da
+   * `deserializeGameObject` (vedi il commento su `GameObjectData.sourceAssetId`
+   * in serialization/types.ts per il perché non è un componente). Mutabile
+   * e pubblico come `name`/`active`: nessuna logica di validazione da
+   * incapsulare dietro un setter, è un semplice riferimento opaco per
+   * questo modulo.
+   */
+  sourceAssetId: string | null = null;
+
   /** @internal — l'Object3D three.js sottostante. Usato da rendering/Transform. */
   readonly _object3D: THREE.Object3D;
 
