@@ -1,5 +1,5 @@
 import { Schema, type, MapSchema } from "@colyseus/schema";
-import type { TransformData } from "@engine/core";
+import type { TransformData, ComponentData } from "@engine/core";
 
 /**
  * EditorRoomState.ts — stato condiviso della Fase 6B: solo Transform dei
@@ -56,6 +56,11 @@ import type { TransformData } from "@engine/core";
  * — `gameObjectMeta.delete()` su un id senza entry (caso di un oggetto
  * pre-esistente rimosso) è un no-op sicuro, verificato empiricamente in
  * EditorRoomState.test.ts.
+ *
+ * Fase 6D aggiunge `components`: sync di aggiunta/rimozione/modifica di
+ * componenti (MeshRenderer/Light/RigidBody/BoxCollider/SphereCollider) su
+ * un GameObject già esistente. Vedi il JSDoc di `ComponentState` sotto per
+ * la forma esatta e il perché di `dataJson` invece di campi per-property.
  */
 
 export class Vector3State extends Schema {
@@ -100,11 +105,65 @@ export class GameObjectMetaState extends Schema {
   @type("string") name = "";
 }
 
+/**
+ * Stato sincronizzato di un componente su un GameObject (Fase 6D). Chiave
+ * nella mappa `EditorRoomState.components`: `` `${gameObjectId}:${type}` ``
+ * (composita — vedi `componentKey` sotto) invece di un id proprio generato
+ * dal client, perché `GameObject.addComponent` (core/GameObject.ts) vieta
+ * già due componenti dello stesso tipo esatto sullo stesso GameObject: la
+ * coppia (gameObjectId, type) è quindi GIÀ un identificatore univoco a
+ * livello di motore, un id aggiuntivo sarebbe ridondante.
+ *
+ * `dataJson` invece di campi Colyseus per-property (come fatto per
+ * `TransformState`): i cinque tipi di componente (MeshRenderer/Light/
+ * RigidBody/BoxCollider/SphereCollider) hanno insiemi di campi troppo
+ * eterogenei per una superset-schema senza sprecare campi inutilizzati per
+ * ogni istanza — stesso compromesso "string, validato/castato ai bordi" già
+ * accettato per `GameObjectMetaState.kind` (vedi sopra), esteso qui
+ * all'intero `ComponentData` invece che al solo discriminante. La
+ * validazione avviene in messages.ts PRIMA di scrivere qui (mai un
+ * `ComponentData` non validato entra in `dataJson`).
+ *
+ * `gameObjectId`/`type` duplicati come campi propri (oltre a far parte
+ * della chiave composita) per evitare che consumer client-side debbano fare
+ * parsing di stringhe per risalire all'uno o all'altro — costo trascurabile
+ * (due stringhe), robustezza maggiore.
+ */
+export class ComponentState extends Schema {
+  @type("string") gameObjectId = "";
+  @type("string") type = "";
+  @type("string") dataJson = "{}";
+}
+
 export class EditorRoomState extends Schema {
   @type({ map: TransformState }) transforms = new MapSchema<TransformState>();
   @type({ map: ClientInfo }) clients = new MapSchema<ClientInfo>();
   @type({ map: "string" }) editingBy = new MapSchema<string>();
   @type({ map: GameObjectMetaState }) gameObjectMeta = new MapSchema<GameObjectMetaState>();
+  @type({ map: ComponentState }) components = new MapSchema<ComponentState>();
+}
+
+/** Costruisce la chiave composita usata da `EditorRoomState.components` (Fase 6D). Vedi JSDoc di `ComponentState` sopra. */
+export function componentKey(gameObjectId: string, type: string): string {
+  return `${gameObjectId}:${type}`;
+}
+
+/** Costruisce una nuova ComponentState da un ComponentData (Fase 6D, usato in hydrateScene/addComponent). */
+export function toComponentState(gameObjectId: string, data: ComponentData): ComponentState {
+  const state = new ComponentState();
+  state.gameObjectId = gameObjectId;
+  state.type = data.type;
+  state.dataJson = JSON.stringify(data);
+  return state;
+}
+
+/**
+ * Aggiorna il `dataJson` di una ComponentState ESISTENTE (Fase 6D, usato da
+ * `updateComponent`) — `gameObjectId`/`type` non cambiano mai su un update
+ * (la chiave composita resta la stessa), solo i campi del componente.
+ */
+export function applyComponentDataToState(state: ComponentState, data: ComponentData): void {
+  state.dataJson = JSON.stringify(data);
 }
 
 /** Costruisce una nuova TransformState da un TransformData (usato in hydrateScene). */

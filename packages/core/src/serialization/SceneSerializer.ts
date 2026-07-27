@@ -39,7 +39,7 @@ export function serializeTransform(go: GameObject): TransformData {
  * da qui senza un meccanismo di registrazione esterno, fuori scope per
  * questa fase (nessun consumer di questo tipo esiste ancora nell'editor).
  */
-function serializeComponent(component: Component): ComponentData | null {
+export function serializeComponent(component: Component): ComponentData | null {
   if (component instanceof MeshRenderer) {
     return { type: "MeshRenderer", shape: component.shape, color: component.color };
   }
@@ -126,7 +126,14 @@ export function applyTransformData(go: GameObject, data: TransformData): void {
   go.transform.localScale = new THREE.Vector3(data.scale.x, data.scale.y, data.scale.z);
 }
 
-function applyComponentData(go: GameObject, data: ComponentData): void {
+/**
+ * Fase 6D: esportata (era privata) — riusata da
+ * `EditorSceneHandle.addComponent` (createEditorScene.ts) per il percorso
+ * "crea componente + imposta campi", identico a quanto già faceva questa
+ * funzione per `deserializeGameObject` sotto, invece di duplicare lo stesso
+ * switch esaustivo in due punti del monorepo.
+ */
+export function applyComponentData(go: GameObject, data: ComponentData): void {
   switch (data.type) {
     case "MeshRenderer": {
       const renderer = go.addComponent(MeshRenderer);
@@ -167,6 +174,73 @@ function applyComponentData(go: GameObject, data: ComponentData): void {
       // Controllo di esaustività: se in futuro si aggiunge un membro a
       // ComponentData senza gestirlo qui, la build fallisce invece di un bug
       // silenzioso a runtime (stesso pattern di RigidBody.ts/Collider.ts).
+      const exhaustive: never = data;
+      throw new Error(`ComponentData.type non gestito: ${JSON.stringify(exhaustive)}`);
+    }
+  }
+}
+
+/**
+ * Aggiorna i campi di un Component GIÀ ESISTENTE con un ComponentData
+ * (Fase 6D) — a differenza di `applyComponentData` sopra, che ne crea uno
+ * nuovo via `go.addComponent`, questa funzione non tocca l'esistenza del
+ * componente: usata dal percorso di update remoto in collabClient.ts,
+ * dove il componente locale corrispondente è già presente (creato in
+ * precedenza da un `addComponent` sincronizzato) e vanno solo aggiornati i
+ * suoi campi. Lancia se il componente concreto passato non corrisponde al
+ * `data.type` atteso: non dovrebbe mai accadere per costruzione (il
+ * chiamante verifica `getComponent` prima di invocare questa funzione), ma
+ * un mismatch qui indicherebbe un bug di chiamata — un errore esplicito è
+ * preferibile ad aggiornare in silenzio i campi sbagliati.
+ */
+export function updateComponentData(component: Component, data: ComponentData): void {
+  switch (data.type) {
+    case "MeshRenderer": {
+      if (!(component instanceof MeshRenderer)) {
+        throw new Error(`updateComponentData: atteso MeshRenderer, ricevuto ${component.constructor.name}`);
+      }
+      component.shape = data.shape;
+      component.color = data.color;
+      return;
+    }
+    case "Light": {
+      if (!(component instanceof Light)) {
+        throw new Error(`updateComponentData: atteso Light, ricevuto ${component.constructor.name}`);
+      }
+      component.kind = data.lightKind;
+      component.color = data.color;
+      component.intensity = data.intensity;
+      return;
+    }
+    case "RigidBody": {
+      if (!(component instanceof RigidBody)) {
+        throw new Error(`updateComponentData: atteso RigidBody, ricevuto ${component.constructor.name}`);
+      }
+      component.type = data.bodyType;
+      component.gravityScale = data.gravityScale;
+      return;
+    }
+    case "BoxCollider": {
+      if (!(component instanceof BoxCollider)) {
+        throw new Error(`updateComponentData: atteso BoxCollider, ricevuto ${component.constructor.name}`);
+      }
+      component.size = { ...data.size };
+      component.friction = data.friction;
+      component.restitution = data.restitution;
+      component.isTrigger = data.isTrigger;
+      return;
+    }
+    case "SphereCollider": {
+      if (!(component instanceof SphereCollider)) {
+        throw new Error(`updateComponentData: atteso SphereCollider, ricevuto ${component.constructor.name}`);
+      }
+      component.radius = data.radius;
+      component.friction = data.friction;
+      component.restitution = data.restitution;
+      component.isTrigger = data.isTrigger;
+      return;
+    }
+    default: {
       const exhaustive: never = data;
       throw new Error(`ComponentData.type non gestito: ${JSON.stringify(exhaustive)}`);
     }

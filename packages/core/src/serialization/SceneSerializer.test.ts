@@ -7,7 +7,7 @@ import { MeshRenderer } from "../rendering/MeshRenderer.js";
 import { Light } from "../rendering/Light.js";
 import { RigidBody, RigidBodyType } from "../physics/RigidBody.js";
 import { BoxCollider, SphereCollider } from "../physics/Collider.js";
-import { serializeScene, deserializeScene } from "./SceneSerializer.js";
+import { serializeScene, deserializeScene, updateComponentData } from "./SceneSerializer.js";
 import type { SceneData, ComponentData } from "./types.js";
 
 /** Round-trip completo attraverso JSON.stringify/parse: verifica che il dato sia davvero JSON-safe, non solo strutturalmente compatibile in memoria. */
@@ -241,5 +241,95 @@ describe("SceneSerializer", () => {
 
     new Engine().step(1 / 60);
     expect(_getLiveGameObjects()).toHaveLength(0);
+  });
+
+  // ---- Fase 6D — updateComponentData (aggiorna un Component ESISTENTE) --
+  describe("updateComponentData", () => {
+    it("aggiorna i campi di un MeshRenderer esistente senza ricrearlo", () => {
+      const go = new GameObject("Cubo");
+      const renderer = go.addComponent(MeshRenderer);
+      renderer.shape = { kind: "box", size: { x: 1, y: 1, z: 1 } };
+      renderer.color = 0xffffff;
+
+      updateComponentData(renderer, {
+        type: "MeshRenderer",
+        shape: { kind: "sphere", radius: 2 },
+        color: 0x123456,
+      });
+
+      expect(renderer.shape).toEqual({ kind: "sphere", radius: 2 });
+      expect(renderer.color).toBe(0x123456);
+      expect(go.getComponent(MeshRenderer)).toBe(renderer); // stessa istanza, non ricreata
+    });
+
+    it("aggiorna i campi di un Light esistente", () => {
+      const go = new GameObject("Luce");
+      const light = go.addComponent(Light);
+      light.kind = { kind: "ambient" };
+      light.color = 0x000000;
+      light.intensity = 1;
+
+      updateComponentData(light, {
+        type: "Light",
+        lightKind: { kind: "directional", position: { x: 1, y: 2, z: 3 } },
+        color: 0xabcdef,
+        intensity: 3,
+      });
+
+      expect(light.kind).toEqual({ kind: "directional", position: { x: 1, y: 2, z: 3 } });
+      expect(light.color).toBe(0xabcdef);
+      expect(light.intensity).toBe(3);
+    });
+
+    it("aggiorna i campi di un RigidBody esistente", () => {
+      const go = new GameObject("Palla");
+      const rb = go.addComponent(RigidBody);
+      rb.type = RigidBodyType.Dynamic;
+      rb.gravityScale = 1;
+
+      updateComponentData(rb, { type: "RigidBody", bodyType: RigidBodyType.Kinematic, gravityScale: 0.2 });
+
+      expect(rb.type).toBe(RigidBodyType.Kinematic);
+      expect(rb.gravityScale).toBe(0.2);
+    });
+
+    it("aggiorna i campi di un BoxCollider/SphereCollider esistente", () => {
+      const boxGO = new GameObject("Box");
+      const boxCollider = boxGO.addComponent(BoxCollider);
+      updateComponentData(boxCollider, {
+        type: "BoxCollider",
+        size: { x: 5, y: 6, z: 7 },
+        friction: 0.9,
+        restitution: 0.1,
+        isTrigger: true,
+      });
+      expect(boxCollider.size).toEqual({ x: 5, y: 6, z: 7 });
+      expect(boxCollider.friction).toBe(0.9);
+      expect(boxCollider.restitution).toBe(0.1);
+      expect(boxCollider.isTrigger).toBe(true);
+
+      const sphereGO = new GameObject("Sphere");
+      const sphereCollider = sphereGO.addComponent(SphereCollider);
+      updateComponentData(sphereCollider, {
+        type: "SphereCollider",
+        radius: 4,
+        friction: 0.3,
+        restitution: 0.6,
+        isTrigger: true,
+      });
+      expect(sphereCollider.radius).toBe(4);
+      expect(sphereCollider.friction).toBe(0.3);
+      expect(sphereCollider.restitution).toBe(0.6);
+      expect(sphereCollider.isTrigger).toBe(true);
+    });
+
+    it("lancia se il Component concreto passato non corrisponde a data.type (mismatch difensivo)", () => {
+      const go = new GameObject("Cubo");
+      const renderer = go.addComponent(MeshRenderer);
+
+      expect(() =>
+        updateComponentData(renderer, { type: "RigidBody", bodyType: RigidBodyType.Dynamic, gravityScale: 1 }),
+      ).toThrow(/atteso RigidBody/);
+    });
   });
 });

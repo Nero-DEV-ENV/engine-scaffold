@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import { readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { TransformData } from "@engine/core";
+import type { TransformData, ComponentData } from "@engine/core";
 import { Server } from "colyseus";
 import { boot, type ColyseusTestServer } from "@colyseus/testing";
 import { EditorRoom } from "./EditorRoom.js";
@@ -22,6 +22,11 @@ function sampleTransform(x = 1, y = 2, z = 3): TransformData {
     rotation: { x: 0, y: 0, z: 0, w: 1 },
     scale: { x: 1, y: 1, z: 1 },
   };
+}
+
+/** Fase 6D — componente di esempio (SphereCollider: nessuna union annidata, il più semplice dei cinque per i test). */
+function sampleComponent(radius = 0.5): ComponentData {
+  return { type: "SphereCollider", radius, friction: 0.5, restitution: 0, isTrigger: false };
 }
 
 describe("EditorRoom", () => {
@@ -86,8 +91,8 @@ describe("EditorRoom", () => {
 
       client.send("hydrateScene", {
         gameObjects: [
-          { id: "go-1", transform: sampleTransform(1, 2, 3) },
-          { id: "go-2", transform: sampleTransform(4, 5, 6) },
+          { id: "go-1", transform: sampleTransform(1, 2, 3), components: [] },
+          { id: "go-2", transform: sampleTransform(4, 5, 6), components: [] },
         ],
       });
 
@@ -100,12 +105,12 @@ describe("EditorRoom", () => {
       const room = await testServer.createRoom<EditorRoom>("editor_room");
       const client = await testServer.connectTo(room);
 
-      client.send("hydrateScene", { gameObjects: [{ id: "go-1", transform: sampleTransform(1, 1, 1) }] });
+      client.send("hydrateScene", { gameObjects: [{ id: "go-1", transform: sampleTransform(1, 1, 1), components: [] }] });
       await waitFor(() => room.state.transforms.size === 1);
 
       // Un secondo hydrate con dati diversi per lo stesso id NON deve
       // sovrascrivere: lo stato già nella Room resta la fonte di verità.
-      client.send("hydrateScene", { gameObjects: [{ id: "go-1", transform: sampleTransform(99, 99, 99) }] });
+      client.send("hydrateScene", { gameObjects: [{ id: "go-1", transform: sampleTransform(99, 99, 99), components: [] }] });
       // Non c'è un evento osservabile da attendere per "non è successo
       // nulla": una breve attesa fissa qui è accettabile perché il test
       // verifica un NON-cambiamento, non un cambiamento (waitFor non si
@@ -118,7 +123,7 @@ describe("EditorRoom", () => {
       const room = await testServer.createRoom<EditorRoom>("editor_room");
       const client = await testServer.connectTo(room);
 
-      client.send("hydrateScene", { gameObjects: [{ id: "go-1", transform: sampleTransform(1, 1, 1) }] });
+      client.send("hydrateScene", { gameObjects: [{ id: "go-1", transform: sampleTransform(1, 1, 1), components: [] }] });
       await waitFor(() => room.state.transforms.size === 1);
 
       client.send("commitTransform", { gameObjectId: "go-1", transform: sampleTransform(7, 8, 9) });
@@ -317,7 +322,7 @@ describe("EditorRoom", () => {
       const room = await testServer.createRoom<EditorRoom>("editor_room");
       const client = await testServer.connectTo(room);
 
-      client.send("hydrateScene", { gameObjects: [{ id: "go-demo", transform: sampleTransform() }] });
+      client.send("hydrateScene", { gameObjects: [{ id: "go-demo", transform: sampleTransform(), components: [] }] });
       await waitFor(() => room.state.transforms.has("go-demo"));
       expect(room.state.gameObjectMeta.has("go-demo")).toBe(false);
 
@@ -392,7 +397,7 @@ describe("EditorRoom", () => {
       const clientA = await testServer.connectTo(room);
 
       // A hydrata un oggetto "pre-esistente" (id fisso, come demo-cube in ogni client) e poi lo rimuove.
-      clientA.send("hydrateScene", { gameObjects: [{ id: "demo-cube", transform: sampleTransform() }] });
+      clientA.send("hydrateScene", { gameObjects: [{ id: "demo-cube", transform: sampleTransform(), components: [] }] });
       await waitFor(() => room.state.transforms.has("demo-cube"));
 
       clientA.send("removeGameObject", { gameObjectId: "demo-cube" });
@@ -402,7 +407,7 @@ describe("EditorRoom", () => {
       // dello stesso id (che possiede ancora, ignaro della rimozione altrui)
       // — non deve ricomparire in transforms.
       const clientC = await testServer.connectTo(room);
-      clientC.send("hydrateScene", { gameObjects: [{ id: "demo-cube", transform: sampleTransform(9, 9, 9) }] });
+      clientC.send("hydrateScene", { gameObjects: [{ id: "demo-cube", transform: sampleTransform(9, 9, 9), components: [] }] });
       await new Promise((resolve) => setTimeout(resolve, 100)); // verifica un NON-cambiamento
 
       expect(room.state.transforms.has("demo-cube")).toBe(false);
@@ -412,7 +417,7 @@ describe("EditorRoom", () => {
       const room = await testServer.createRoom<EditorRoom>("editor_room");
       const clientA = await testServer.connectTo(room);
 
-      clientA.send("hydrateScene", { gameObjects: [{ id: "demo-cube", transform: sampleTransform() }] });
+      clientA.send("hydrateScene", { gameObjects: [{ id: "demo-cube", transform: sampleTransform(), components: [] }] });
       await waitFor(() => room.state.transforms.has("demo-cube"));
 
       clientA.send("removeGameObject", { gameObjectId: "demo-cube" });
@@ -426,8 +431,8 @@ describe("EditorRoom", () => {
       // demo-sphere non è mai stato rimosso: deve restare fuori dalla risposta.
       clientC.send("hydrateScene", {
         gameObjects: [
-          { id: "demo-cube", transform: sampleTransform(9, 9, 9) },
-          { id: "demo-sphere", transform: sampleTransform() },
+          { id: "demo-cube", transform: sampleTransform(9, 9, 9), components: [] },
+          { id: "demo-sphere", transform: sampleTransform(), components: [] },
         ],
       });
 
@@ -444,8 +449,310 @@ describe("EditorRoom", () => {
         received = true;
       });
 
-      client.send("hydrateScene", { gameObjects: [{ id: "demo-cube", transform: sampleTransform() }] });
+      client.send("hydrateScene", { gameObjects: [{ id: "demo-cube", transform: sampleTransform(), components: [] }] });
       await waitFor(() => room.state.transforms.has("demo-cube"));
+      await new Promise((resolve) => setTimeout(resolve, 100)); // verifica un NON-invio
+
+      expect(received).toBe(false);
+    });
+  });
+
+  describe("sync componenti (Fase 6D)", () => {
+    it("addComponent aggiunge un componente a un GameObject esistente", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("addGameObject", { id: "go-1", kind: "empty", name: "GameObject", transform: sampleTransform() });
+      await waitFor(() => room.state.transforms.has("go-1"));
+
+      client.send("addComponent", { gameObjectId: "go-1", component: sampleComponent(0.5) });
+      await waitFor(() => room.state.components.has("go-1:SphereCollider"));
+
+      const state = room.state.components.get("go-1:SphereCollider");
+      expect(state?.gameObjectId).toBe("go-1");
+      expect(state?.type).toBe("SphereCollider");
+      expect(JSON.parse(state?.dataJson ?? "{}")).toEqual(sampleComponent(0.5));
+
+      const entries = readLoggedEntries(logPath);
+      expect(entries.some((entry) => (entry as { type: string }).type === "component_added")).toBe(true);
+    });
+
+    it("addComponent su un tipo già presente sullo stesso GameObject viene ignorato", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("addGameObject", { id: "go-1", kind: "empty", name: "GameObject", transform: sampleTransform() });
+      await waitFor(() => room.state.transforms.has("go-1"));
+
+      client.send("addComponent", { gameObjectId: "go-1", component: sampleComponent(0.5) });
+      await waitFor(() => room.state.components.has("go-1:SphereCollider"));
+
+      client.send("addComponent", { gameObjectId: "go-1", component: sampleComponent(9) });
+      await new Promise((resolve) => setTimeout(resolve, 100)); // verifica un NON-cambiamento
+
+      const state = room.state.components.get("go-1:SphereCollider");
+      expect(JSON.parse(state?.dataJson ?? "{}")).toEqual(sampleComponent(0.5));
+    });
+
+    it("addComponent su un gameObjectId sconosciuto viene ignorato", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("addComponent", { gameObjectId: "go-inesistente", component: sampleComponent() });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      expect(room.state.components.size).toBe(0);
+    });
+
+    it("removeComponent rimuove l'entry da components", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("addGameObject", { id: "go-1", kind: "empty", name: "GameObject", transform: sampleTransform() });
+      await waitFor(() => room.state.transforms.has("go-1"));
+      client.send("addComponent", { gameObjectId: "go-1", component: sampleComponent() });
+      await waitFor(() => room.state.components.has("go-1:SphereCollider"));
+
+      client.send("removeComponent", { gameObjectId: "go-1", type: "SphereCollider" });
+      await waitFor(() => !room.state.components.has("go-1:SphereCollider"));
+
+      expect(room.state.components.has("go-1:SphereCollider")).toBe(false);
+      const entries = readLoggedEntries(logPath);
+      expect(entries.some((entry) => (entry as { type: string }).type === "component_removed")).toBe(true);
+    });
+
+    it("removeComponent su un componente inesistente viene ignorato", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("addGameObject", { id: "go-1", kind: "empty", name: "GameObject", transform: sampleTransform() });
+      await waitFor(() => room.state.transforms.has("go-1"));
+
+      client.send("removeComponent", { gameObjectId: "go-1", type: "SphereCollider" });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      const entries = readLoggedEntries(logPath);
+      expect(entries.some((entry) => (entry as { type: string }).type === "component_removed")).toBe(false);
+    });
+
+    it("updateComponent aggiorna i campi di un componente già presente", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("addGameObject", { id: "go-1", kind: "empty", name: "GameObject", transform: sampleTransform() });
+      await waitFor(() => room.state.transforms.has("go-1"));
+      client.send("addComponent", { gameObjectId: "go-1", component: sampleComponent(0.5) });
+      await waitFor(() => room.state.components.has("go-1:SphereCollider"));
+
+      client.send("updateComponent", { gameObjectId: "go-1", component: sampleComponent(2) });
+      await waitFor(() => JSON.parse(room.state.components.get("go-1:SphereCollider")?.dataJson ?? "{}").radius === 2);
+
+      const entries = readLoggedEntries(logPath);
+      expect(entries.some((entry) => (entry as { type: string }).type === "component_updated")).toBe(true);
+    });
+
+    it("updateComponent su un componente non ancora presente viene ignorato", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("addGameObject", { id: "go-1", kind: "empty", name: "GameObject", transform: sampleTransform() });
+      await waitFor(() => room.state.transforms.has("go-1"));
+
+      client.send("updateComponent", { gameObjectId: "go-1", component: sampleComponent() });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      expect(room.state.components.has("go-1:SphereCollider")).toBe(false);
+    });
+
+    it("addComponent/removeComponent/updateComponent sono bloccati se il gameObjectId è lockato da un ALTRO client", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const clientA = await testServer.connectTo(room);
+      const clientB = await testServer.connectTo(room);
+
+      clientA.send("addGameObject", { id: "go-1", kind: "empty", name: "GameObject", transform: sampleTransform() });
+      await waitFor(() => room.state.transforms.has("go-1"));
+      clientA.send("addComponent", { gameObjectId: "go-1", component: sampleComponent(0.5) });
+      await waitFor(() => room.state.components.has("go-1:SphereCollider"));
+
+      clientA.send("beginEdit", { gameObjectId: "go-1" });
+      await waitFor(() => room.state.editingBy.has("go-1"));
+
+      clientB.send("updateComponent", { gameObjectId: "go-1", component: sampleComponent(9) });
+      clientB.send("removeComponent", { gameObjectId: "go-1", type: "SphereCollider" });
+      await new Promise((resolve) => setTimeout(resolve, 100)); // verifica un NON-cambiamento
+
+      expect(JSON.parse(room.state.components.get("go-1:SphereCollider")?.dataJson ?? "{}").radius).toBe(0.5);
+    });
+
+    it("addComponent/removeComponent/updateComponent riescono se il gameObjectId è lockato dallo STESSO client", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("addGameObject", { id: "go-1", kind: "empty", name: "GameObject", transform: sampleTransform() });
+      await waitFor(() => room.state.transforms.has("go-1"));
+
+      client.send("beginEdit", { gameObjectId: "go-1" });
+      await waitFor(() => room.state.editingBy.has("go-1"));
+
+      client.send("addComponent", { gameObjectId: "go-1", component: sampleComponent(0.5) });
+      await waitFor(() => room.state.components.has("go-1:SphereCollider"));
+
+      client.send("updateComponent", { gameObjectId: "go-1", component: sampleComponent(2) });
+      await waitFor(() => JSON.parse(room.state.components.get("go-1:SphereCollider")?.dataJson ?? "{}").radius === 2);
+
+      client.send("removeComponent", { gameObjectId: "go-1", type: "SphereCollider" });
+      await waitFor(() => !room.state.components.has("go-1:SphereCollider"));
+
+      expect(room.state.components.has("go-1:SphereCollider")).toBe(false);
+    });
+
+    it("addGameObject con components iniziali li popola in components (es. il MeshRenderer di default di Cube/Sphere/Plane)", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("addGameObject", {
+        id: "go-1",
+        kind: "box",
+        name: "Cube",
+        transform: sampleTransform(),
+        components: [{ type: "MeshRenderer", shape: { kind: "box", size: { x: 1, y: 1, z: 1 } }, color: 0xffffff }],
+      });
+      await waitFor(() => room.state.components.has("go-1:MeshRenderer"));
+
+      const state = room.state.components.get("go-1:MeshRenderer");
+      expect(state?.gameObjectId).toBe("go-1");
+      expect(JSON.parse(state?.dataJson ?? "{}")).toEqual({
+        type: "MeshRenderer",
+        shape: { kind: "box", size: { x: 1, y: 1, z: 1 } },
+        color: 0xffffff,
+      });
+    });
+
+    it("removeGameObject ripulisce anche le entry components associate a quel GameObject", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("addGameObject", { id: "go-1", kind: "empty", name: "GameObject", transform: sampleTransform() });
+      await waitFor(() => room.state.transforms.has("go-1"));
+      client.send("addComponent", { gameObjectId: "go-1", component: sampleComponent() });
+      await waitFor(() => room.state.components.has("go-1:SphereCollider"));
+
+      client.send("removeGameObject", { gameObjectId: "go-1" });
+      await waitFor(() => !room.state.transforms.has("go-1"));
+
+      expect(room.state.components.has("go-1:SphereCollider")).toBe(false);
+    });
+
+    it("hydrateScene popola components per ogni GameObject inviato", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("hydrateScene", {
+        gameObjects: [{ id: "go-1", transform: sampleTransform(), components: [sampleComponent(0.5)] }],
+      });
+
+      await waitFor(() => room.state.components.has("go-1:SphereCollider"));
+      expect(JSON.parse(room.state.components.get("go-1:SphereCollider")?.dataJson ?? "{}").radius).toBe(0.5);
+    });
+
+    it("hydrateScene è idempotente per i componenti: non sovrascrive una chiave già presente", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("hydrateScene", {
+        gameObjects: [{ id: "go-1", transform: sampleTransform(), components: [sampleComponent(0.5)] }],
+      });
+      await waitFor(() => room.state.components.has("go-1:SphereCollider"));
+
+      client.send("hydrateScene", {
+        gameObjects: [{ id: "go-1", transform: sampleTransform(), components: [sampleComponent(99)] }],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100)); // verifica un NON-cambiamento
+
+      expect(JSON.parse(room.state.components.get("go-1:SphereCollider")?.dataJson ?? "{}").radius).toBe(0.5);
+    });
+
+    it("hydrateScene salta i componenti di un GameObject già rimosso definitivamente", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const clientA = await testServer.connectTo(room);
+
+      clientA.send("hydrateScene", { gameObjects: [{ id: "demo-cube", transform: sampleTransform(), components: [] }] });
+      await waitFor(() => room.state.transforms.has("demo-cube"));
+      clientA.send("removeGameObject", { gameObjectId: "demo-cube" });
+      await waitFor(() => !room.state.transforms.has("demo-cube"));
+
+      const clientC = await testServer.connectTo(room);
+      clientC.send("hydrateScene", {
+        gameObjects: [{ id: "demo-cube", transform: sampleTransform(), components: [sampleComponent()] }],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100)); // verifica un NON-cambiamento
+
+      expect(room.state.components.has("demo-cube:SphereCollider")).toBe(false);
+    });
+
+    it("hydrateScene NON resuscita un componente già rimosso su un GameObject ancora vivo (join tardivo)", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const clientA = await testServer.connectTo(room);
+
+      clientA.send("hydrateScene", {
+        gameObjects: [{ id: "demo-cube", transform: sampleTransform(), components: [sampleComponent()] }],
+      });
+      await waitFor(() => room.state.components.has("demo-cube:SphereCollider"));
+
+      clientA.send("removeComponent", { gameObjectId: "demo-cube", type: "SphereCollider" });
+      await waitFor(() => !room.state.components.has("demo-cube:SphereCollider"));
+
+      // Un client C, connesso DOPO la rimozione, hydrata la SUA copia locale
+      // (che possiede ancora il componente, ignaro della rimozione altrui)
+      // — non deve ricomparire in components. demo-cube stesso resta vivo
+      // (mai rimosso come GameObject), solo il suo SphereCollider lo è.
+      const clientC = await testServer.connectTo(room);
+      clientC.send("hydrateScene", {
+        gameObjects: [{ id: "demo-cube", transform: sampleTransform(), components: [sampleComponent(9)] }],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100)); // verifica un NON-cambiamento
+
+      expect(room.state.components.has("demo-cube:SphereCollider")).toBe(false);
+    });
+
+    it("hydrateScene risponde con componentsRemoved (mirato) al client che ha provato a hydratare una chiave già rimossa", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const clientA = await testServer.connectTo(room);
+
+      clientA.send("hydrateScene", {
+        gameObjects: [{ id: "demo-cube", transform: sampleTransform(), components: [sampleComponent()] }],
+      });
+      await waitFor(() => room.state.components.has("demo-cube:SphereCollider"));
+
+      clientA.send("removeComponent", { gameObjectId: "demo-cube", type: "SphereCollider" });
+      await waitFor(() => !room.state.components.has("demo-cube:SphereCollider"));
+
+      const clientC = await testServer.connectTo(room);
+      const received = new Promise<{ componentKeys: string[] }>((resolve) => {
+        clientC.onMessage("componentsRemoved", (payload: { componentKeys: string[] }) => resolve(payload));
+      });
+
+      clientC.send("hydrateScene", {
+        gameObjects: [{ id: "demo-cube", transform: sampleTransform(), components: [sampleComponent(9)] }],
+      });
+
+      const payload = await received;
+      expect(payload.componentKeys).toEqual(["demo-cube:SphereCollider"]);
+    });
+
+    it("hydrateScene non invia componentsRemoved quando non ci sono chiavi scartate", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      let received = false;
+      client.onMessage("componentsRemoved", () => {
+        received = true;
+      });
+
+      client.send("hydrateScene", {
+        gameObjects: [{ id: "demo-cube", transform: sampleTransform(), components: [sampleComponent()] }],
+      });
+      await waitFor(() => room.state.components.has("demo-cube:SphereCollider"));
       await new Promise((resolve) => setTimeout(resolve, 100)); // verifica un NON-invio
 
       expect(received).toBe(false);

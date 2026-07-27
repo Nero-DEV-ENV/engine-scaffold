@@ -46,7 +46,31 @@ export type ActivityLogEntry =
   | { type: "scene_hydrated"; roomId: string; sessionId: string; gameObjectCount: number; timestamp: number }
   | { type: "transform_committed"; roomId: string; sessionId: string; gameObjectId: string; timestamp: number }
   | { type: "gameobject_added"; roomId: string; sessionId: string; gameObjectId: string; timestamp: number }
-  | { type: "gameobject_removed"; roomId: string; sessionId: string; gameObjectId: string; timestamp: number };
+  | { type: "gameobject_removed"; roomId: string; sessionId: string; gameObjectId: string; timestamp: number }
+  | {
+      type: "component_added";
+      roomId: string;
+      sessionId: string;
+      gameObjectId: string;
+      componentType: string;
+      timestamp: number;
+    }
+  | {
+      type: "component_removed";
+      roomId: string;
+      sessionId: string;
+      gameObjectId: string;
+      componentType: string;
+      timestamp: number;
+    }
+  | {
+      type: "component_updated";
+      roomId: string;
+      sessionId: string;
+      gameObjectId: string;
+      componentType: string;
+      timestamp: number;
+    };
 
 /** Cambia il file su cui `logActivity` scrive (es. per i test, o per il path reale di deploy). */
 export function configureActivityLog(path: string): void {

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import {
   selectionStore,
@@ -7,6 +7,51 @@ import {
   editorSceneHandleStore,
 } from "../store/editorStore.js";
 import { radToDeg, degToRad, roundForDisplay, parseNumericInput } from "./transformFields.js";
+import { Component, serializeComponent, RigidBodyType } from "@engine/core";
+import type { ComponentData, ComponentTypeName, GameObject } from "@engine/core";
+import type { EditorSceneHandle } from "../scene/createEditorScene.js";
+
+/**
+ * Fase 6D — un componente per l'Inspector: opzioni del menu "Aggiungi
+ * componente" (solo i tipi NON ancora presenti sul GameObject selezionato,
+ * filtrati in `ComponentsSection` sotto) e i valori di default con cui
+ * viene creato, allineati ESATTAMENTE ai default reali del motore
+ * (`DEFAULT_SHAPE`/`DEFAULT_COLOR` in MeshRenderer.ts, `DEFAULT_KIND`/
+ * `DEFAULT_COLOR`/`DEFAULT_INTENSITY` in Light.ts, il default di
+ * `RigidBody.type`/`gravityScale`, i default di classe di Collider.ts) —
+ * verificati sul codice reale, non inventati.
+ */
+const COMPONENT_OPTIONS: ReadonlyArray<{ type: ComponentTypeName; label: string }> = [
+  { type: "MeshRenderer", label: "Mesh Renderer" },
+  { type: "Light", label: "Light" },
+  { type: "RigidBody", label: "Rigid Body" },
+  { type: "BoxCollider", label: "Box Collider" },
+  { type: "SphereCollider", label: "Sphere Collider" },
+];
+
+function defaultComponentData(type: ComponentTypeName): ComponentData {
+  switch (type) {
+    case "MeshRenderer":
+      return { type: "MeshRenderer", shape: { kind: "box", size: { x: 1, y: 1, z: 1 } }, color: 0xffffff };
+    case "Light":
+      return { type: "Light", lightKind: { kind: "ambient" }, color: 0xffffff, intensity: 1 };
+    case "RigidBody":
+      return { type: "RigidBody", bodyType: RigidBodyType.Dynamic, gravityScale: 1 };
+    case "BoxCollider":
+      return { type: "BoxCollider", size: { x: 1, y: 1, z: 1 }, friction: 0.5, restitution: 0, isTrigger: false };
+    case "SphereCollider":
+      return { type: "SphereCollider", radius: 0.5, friction: 0.5, restitution: 0, isTrigger: false };
+  }
+}
+
+/** Fase 6D — MeshRenderer.color/Light.color sono un numero (0xRRGGBB, convenzione three.js), <input type="color"> vuole una stringa "#rrggbb". */
+function colorNumberToHex(color: number): string {
+  return `#${color.toString(16).padStart(6, "0")}`;
+}
+
+function hexToColorNumber(hex: string): number {
+  return parseInt(hex.slice(1), 16);
+}
 
 /**
  * Inspector — proprietà Transform del GameObject selezionato (Fase 4C).
@@ -43,7 +88,17 @@ import { radToDeg, degToRad, roundForDisplay, parseNumericInput } from "./transf
  * `EditorSceneHandle.removeGameObject` (createEditorScene.ts) — resettare
  * `selectionStore` a `null` non serve qui: lo fa già `removeGameObject`
  * stesso quando l'oggetto rimosso è quello selezionato, che è sempre il
- * caso da questo bottone. Nessun sync di rete ancora — arriva in 6C.2.
+ * caso da questo bottone. Sync di rete arrivato in 6C.2.
+ *
+ * Fase 6D aggiunge la sezione "Components" sotto Scale
+ * (`ComponentsSection` sotto): elenco dei componenti presenti
+ * (`selected.getComponents(Component)`, API pubblica esistente — accetta
+ * la classe base astratta, verificato sul codice reale di
+ * core/Component.ts) con campi editabili per tipo, bottone "+" con lo
+ * stesso pattern menu di Hierarchy.tsx (solo i tipi non ancora presenti),
+ * bottone "Rimuovi" per componente. `shape`/`lightKind` (MeshRenderer/
+ * Light) mostrati in sola lettura: sono a loro volta union discriminate
+ * annidate, editarle è fuori scope per questa fase (deciso con l'utente).
  */
 export function Inspector(): JSX.Element {
   const selected = selectionStore.useValue();
@@ -125,6 +180,7 @@ export function Inspector(): JSX.Element {
         onChangeAxis={commitRotationDegrees}
       />
       <Vector3Row title="Scale" x={scale.x} y={scale.y} z={scale.z} onChangeAxis={commitScale} />
+      <ComponentsSection gameObject={selectedGameObject} handle={handle} />
     </div>
   );
 }
@@ -193,6 +249,273 @@ function NumberField({
         onChange={handleChange}
         className="inspector-field-input"
       />
+    </label>
+  );
+}
+
+/**
+ * Fase 6D — sezione "Components" dell'Inspector: elenco dei componenti
+ * presenti su `gameObject` + bottone "+" (stesso pattern menu di
+ * `hierarchy-add`/`hierarchy-add-menu` in Hierarchy.tsx, solo i tipi NON
+ * ancora presenti — mirror del vincolo di `GameObject.addComponent` nel
+ * motore, che impedisce comunque il duplicato anche se l'utente riuscisse
+ * a cliccare un tipo già presente).
+ */
+function ComponentsSection({
+  gameObject,
+  handle,
+}: {
+  gameObject: GameObject;
+  handle: EditorSceneHandle | null;
+}): JSX.Element {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onPointerDown(event: PointerEvent): void {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [menuOpen]);
+
+  const components = gameObject.getComponents(Component);
+  const presentTypes = new Set(
+    components.map((c) => serializeComponent(c)?.type).filter((t): t is ComponentTypeName => t !== undefined),
+  );
+  const availableOptions = COMPONENT_OPTIONS.filter((option) => !presentTypes.has(option.type));
+
+  function onAdd(type: ComponentTypeName): void {
+    if (!handle) return;
+    handle.addComponent(gameObject, defaultComponentData(type));
+    setMenuOpen(false);
+  }
+
+  return (
+    <div className="inspector-components">
+      <div className="inspector-components-header">
+        <span className="inspector-row-title">Components</span>
+        <div className="hierarchy-add" ref={menuRef}>
+          <button
+            type="button"
+            className="hierarchy-add-button"
+            disabled={!handle || availableOptions.length === 0}
+            aria-label="Aggiungi componente"
+            onClick={() => setMenuOpen((open) => !open)}
+          >
+            +
+          </button>
+          {menuOpen && (
+            <ul className="hierarchy-add-menu">
+              {availableOptions.map((option) => (
+                <li key={option.type}>
+                  <button type="button" className="hierarchy-add-option" onClick={() => onAdd(option.type)}>
+                    {option.label}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+      {components.length === 0 ? (
+        <p className="panel-placeholder">Nessun componente.</p>
+      ) : (
+        components.map((component) => (
+          <ComponentRow key={component.constructor.name} gameObject={gameObject} component={component} handle={handle} />
+        ))
+      )}
+    </div>
+  );
+}
+
+/** Fase 6D — una riga della sezione Components: titolo + campi editabili per tipo (`ComponentFields` sotto) + bottone "Rimuovi". */
+function ComponentRow({
+  gameObject,
+  component,
+  handle,
+}: {
+  gameObject: GameObject;
+  component: Component;
+  handle: EditorSceneHandle | null;
+}): JSX.Element | null {
+  const data = serializeComponent(component);
+  // Non dovrebbe mai accadere per i 5 tipi gestiti da Inspector — difesa
+  // se in futuro un componente non serializzabile venisse aggiunto al
+  // motore senza che questo pannello venga aggiornato di pari passo.
+  if (!data) return null;
+  // Cattura `data` (già narrowed a non-null sopra) in una const separata:
+  // stesso motivo di `selectedGameObject` nel componente Inspector —
+  // TypeScript non propaga il narrowing dentro le function annidate sotto.
+  const componentData = data;
+
+  function commit(next: ComponentData): void {
+    if (!handle) return;
+    handle.updateComponent(gameObject, next);
+  }
+
+  function onRemove(): void {
+    if (!handle) return;
+    handle.removeComponent(gameObject, componentData.type);
+  }
+
+  return (
+    <div className="inspector-component">
+      <div className="inspector-component-header">
+        <span className="inspector-component-title">
+          {COMPONENT_OPTIONS.find((option) => option.type === componentData.type)?.label ?? componentData.type}
+        </span>
+        <button type="button" className="inspector-delete-button" disabled={!handle} onClick={onRemove}>
+          Rimuovi
+        </button>
+      </div>
+      <ComponentFields data={componentData} onCommit={commit} />
+    </div>
+  );
+}
+
+const RIGID_BODY_TYPE_OPTIONS: ReadonlyArray<{ value: RigidBodyType; label: string }> = [
+  { value: RigidBodyType.Dynamic, label: "Dynamic" },
+  { value: RigidBodyType.Kinematic, label: "Kinematic" },
+  { value: RigidBodyType.Fixed, label: "Fixed" },
+];
+
+/**
+ * Fase 6D — campi editabili specifici per `data.type`. `shape`/`lightKind`
+ * (MeshRenderer/Light) sono union discriminate annidate, mostrate in sola
+ * lettura (decisione confermata con l'utente, vedi JSDoc di Inspector
+ * sopra) invece di un secondo switch esaustivo dentro la UI.
+ */
+function ComponentFields({ data, onCommit }: { data: ComponentData; onCommit: (next: ComponentData) => void }): JSX.Element {
+  switch (data.type) {
+    case "MeshRenderer":
+      return (
+        <>
+          <p className="inspector-component-readonly">Shape: {data.shape.kind}</p>
+          <label className="inspector-field">
+            <span className="inspector-field-label">Color</span>
+            <input
+              type="color"
+              value={colorNumberToHex(data.color)}
+              onChange={(event) => onCommit({ ...data, color: hexToColorNumber(event.target.value) })}
+              className="inspector-color-input"
+            />
+          </label>
+        </>
+      );
+    case "Light":
+      return (
+        <>
+          <p className="inspector-component-readonly">Kind: {data.lightKind.kind}</p>
+          <label className="inspector-field">
+            <span className="inspector-field-label">Color</span>
+            <input
+              type="color"
+              value={colorNumberToHex(data.color)}
+              onChange={(event) => onCommit({ ...data, color: hexToColorNumber(event.target.value) })}
+              className="inspector-color-input"
+            />
+          </label>
+          <NumberField label="Intensity" value={data.intensity} onCommit={(next) => onCommit({ ...data, intensity: next })} />
+        </>
+      );
+    case "RigidBody":
+      return (
+        <>
+          <SelectField
+            label="Body Type"
+            value={data.bodyType}
+            options={RIGID_BODY_TYPE_OPTIONS}
+            onCommit={(next) => onCommit({ ...data, bodyType: next })}
+          />
+          <NumberField
+            label="Gravity Scale"
+            value={data.gravityScale}
+            onCommit={(next) => onCommit({ ...data, gravityScale: next })}
+          />
+        </>
+      );
+    case "BoxCollider":
+      return (
+        <>
+          <Vector3Row
+            title="Size"
+            x={data.size.x}
+            y={data.size.y}
+            z={data.size.z}
+            onChangeAxis={(axis, value) => onCommit({ ...data, size: { ...data.size, [axis]: value } })}
+          />
+          <NumberField label="Friction" value={data.friction} onCommit={(next) => onCommit({ ...data, friction: next })} />
+          <NumberField
+            label="Restitution"
+            value={data.restitution}
+            onCommit={(next) => onCommit({ ...data, restitution: next })}
+          />
+          <BooleanField label="Is Trigger" checked={data.isTrigger} onCommit={(next) => onCommit({ ...data, isTrigger: next })} />
+        </>
+      );
+    case "SphereCollider":
+      return (
+        <>
+          <NumberField label="Radius" value={data.radius} onCommit={(next) => onCommit({ ...data, radius: next })} />
+          <NumberField label="Friction" value={data.friction} onCommit={(next) => onCommit({ ...data, friction: next })} />
+          <NumberField
+            label="Restitution"
+            value={data.restitution}
+            onCommit={(next) => onCommit({ ...data, restitution: next })}
+          />
+          <BooleanField label="Is Trigger" checked={data.isTrigger} onCommit={(next) => onCommit({ ...data, isTrigger: next })} />
+        </>
+      );
+  }
+}
+
+function SelectField<T extends string>({
+  label,
+  value,
+  options,
+  onCommit,
+}: {
+  label: string;
+  value: T;
+  options: ReadonlyArray<{ value: T; label: string }>;
+  onCommit: (next: T) => void;
+}): JSX.Element {
+  return (
+    <label className="inspector-field inspector-select-field">
+      <span className="inspector-field-label">{label}</span>
+      <select className="inspector-select-input" value={value} onChange={(event) => onCommit(event.target.value as T)}>
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function BooleanField({
+  label,
+  checked,
+  onCommit,
+}: {
+  label: string;
+  checked: boolean;
+  onCommit: (next: boolean) => void;
+}): JSX.Element {
+  return (
+    <label className="inspector-field inspector-checkbox-field">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onCommit(event.target.checked)}
+        className="inspector-checkbox-input"
+      />
+      <span className="inspector-field-label">{label}</span>
     </label>
   );
 }

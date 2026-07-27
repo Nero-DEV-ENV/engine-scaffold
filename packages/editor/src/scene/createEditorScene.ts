@@ -6,6 +6,7 @@ import {
   GameObject,
   Destroy,
   MeshRenderer,
+  Component,
   createRenderer,
   createBasicLighting,
   OrbitCameraController,
@@ -13,8 +14,8 @@ import {
   Physics,
   _resetPhysics,
 } from "@engine/core";
-import type { SceneData, TransformData, MeshShape } from "@engine/core";
-import { serializeTransform, applyTransformData } from "@engine/core";
+import type { SceneData, TransformData, MeshShape, ComponentData, ComponentTypeName } from "@engine/core";
+import { serializeTransform, applyTransformData, serializeComponent, applyComponentData, updateComponentData } from "@engine/core";
 import { findOwningGameObject, flattenGameObjects } from "./hierarchy.js";
 import { loadSceneReplacingCurrent } from "./sceneLoad.js";
 import { selectionStore, sceneRootsStore, bumpTransformVersion } from "../store/editorStore.js";
@@ -24,6 +25,9 @@ import {
   sendEndEdit,
   sendAddGameObject,
   sendRemoveGameObject,
+  sendAddComponent,
+  sendRemoveComponent,
+  sendUpdateComponent,
   editingByStore,
   presenceStore,
   mySessionIdStore,
@@ -152,6 +156,37 @@ export interface EditorSceneHandle {
    * `removeGameObject` broadcastato dal server.
    */
   removeGameObject(gameObject: GameObject, options?: { broadcast?: boolean }): void;
+  /**
+   * Fase 6D — aggiunge `data` come nuovo componente di `gameObject`. Lancia
+   * se `gameObject` ha già un componente dello stesso `data.type` (mirror
+   * del vincolo di `GameObject.addComponent` nel motore — vedi
+   * core/GameObject.ts): il chiamante (menu "Aggiungi componente" in
+   * Inspector.tsx) deve già filtrare i tipi presenti, quindi non dovrebbe
+   * mai accadere da UI; il percorso remoto (collabClient.ts) verifica
+   * l'esistenza PRIMA di chiamare questo metodo, per lo stesso motivo.
+   *
+   * `options.broadcast` (default `true`, stesso significato di
+   * `addGameObject`/`removeGameObject`): quando `true` (chiamata locale da
+   * Inspector.tsx), invia `addComponent{gameObjectId, component}` al
+   * server SUBITO dopo la creazione locale ottimistica. Quando `false`,
+   * usato dalla ricostruzione remota in collabClient.ts.
+   */
+  addComponent(gameObject: GameObject, data: ComponentData, options?: { broadcast?: boolean }): Component;
+  /**
+   * Fase 6D — rimuove il componente di tipo `type` da `gameObject`, se
+   * presente. No-op silenzioso se `gameObject` non ha un componente di
+   * quel tipo — stesso stile "richiesta ignorata silenziosamente su intent
+   * non valido" già usato da `removeGameObject`. Stesso significato di
+   * `options.broadcast` delle altre funzioni di questa interfaccia.
+   */
+  removeComponent(gameObject: GameObject, type: ComponentTypeName, options?: { broadcast?: boolean }): void;
+  /**
+   * Fase 6D — aggiorna i campi del componente di tipo `data.type` già
+   * presente su `gameObject` (semantica OPPOSTA di `addComponent`: no-op
+   * silenzioso se il componente NON esiste ancora, invece che se esiste
+   * già). Stesso significato di `options.broadcast` delle altre funzioni.
+   */
+  updateComponent(gameObject: GameObject, data: ComponentData, options?: { broadcast?: boolean }): void;
   /** Da chiamare ad ogni resize del container (via ResizeObserver, non window resize — vedi Viewport.tsx). */
   setSize(width: number, height: number): void;
   /** Ferma il loop, rilascia renderer/controls/listener e libera il registry globale dei GameObject (vedi Scene.ts). */
@@ -200,6 +235,28 @@ function defaultNameForKind(kind: "empty" | "box" | "sphere" | "plane"): string 
     case "plane":
       return "Plane";
   }
+}
+
+/**
+ * Fase 6D — trova il componente di tipo `type` già presente su
+ * `gameObject`, o `null` se assente. Usa `serializeComponent` (invece di
+ * una mappa `ComponentTypeName` → classe concreta, che duplicherebbe lo
+ * switch già esaustivo dentro `serializeComponent`/`applyComponentData` in
+ * SceneSerializer.ts) per confrontare il `type` di ciascun componente
+ * presente — `getComponents(Component)` (classe base astratta, API
+ * pubblica già esistente) restituisce OGNI componente indipendentemente
+ * dal tipo concreto.
+ */
+function findComponentByType(gameObject: GameObject, type: ComponentTypeName): Component | null {
+  return gameObject.getComponents(Component).find((c) => serializeComponent(c)?.type === type) ?? null;
+}
+
+/** Fase 6D — tutti i componenti CORRENTI di `gameObject`, serializzati (usato dal payload `addGameObject` broadcast e da un futuro hydrate lato editor). */
+function serializeComponentsOf(gameObject: GameObject): ComponentData[] {
+  return gameObject
+    .getComponents(Component)
+    .map(serializeComponent)
+    .filter((data): data is ComponentData => data !== null);
 }
 
 export async function createEditorScene(container: HTMLElement): Promise<EditorSceneHandle> {
@@ -708,7 +765,7 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
       selectionStore.set(go);
     }
     if (broadcast) {
-      sendAddGameObject(go.id, kind, go.name, serializeTransform(go));
+      sendAddGameObject(go.id, kind, go.name, serializeTransform(go), serializeComponentsOf(go));
     }
     return go;
   }
@@ -737,6 +794,52 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
     if (broadcast) {
       sendRemoveGameObject(id);
     }
+  }
+
+  /**
+   * Fase 6D — vedi JSDoc su `EditorSceneHandle.addComponent`.
+   * `bumpTransformVersion()` (nome storico, vedi editorStore.ts): riusato
+   * qui come segnale generico "il GameObject selezionato è cambiato,
+   * ridisegna l'Inspector" — esattamente lo stesso scopo per cui esiste
+   * già (Position/Rotation/Scale), solo applicato a un componente invece
+   * che al Transform. Necessario sia per il click locale su "Aggiungi
+   * componente" sia per un componente arrivato da un ALTRO client
+   * (collabClient.ts chiama questa stessa funzione con broadcast:false).
+   */
+  function addComponent(gameObject: GameObject, data: ComponentData, options?: { broadcast?: boolean }): Component {
+    const { broadcast = true } = options ?? {};
+    applyComponentData(gameObject, data);
+    if (broadcast) {
+      sendAddComponent(gameObject.id, data);
+    }
+    bumpTransformVersion();
+    // Non può essere null: applyComponentData sopra lo ha appena creato
+    // (o ha lanciato, se il tipo esisteva già — vedi JSDoc dell'interfaccia).
+    return findComponentByType(gameObject, data.type)!;
+  }
+
+  /** Fase 6D — vedi JSDoc su `EditorSceneHandle.removeComponent`. */
+  function removeComponent(gameObject: GameObject, type: ComponentTypeName, options?: { broadcast?: boolean }): void {
+    const { broadcast = true } = options ?? {};
+    const component = findComponentByType(gameObject, type);
+    if (!component) return;
+    gameObject.removeComponent(component);
+    if (broadcast) {
+      sendRemoveComponent(gameObject.id, type);
+    }
+    bumpTransformVersion();
+  }
+
+  /** Fase 6D — vedi JSDoc su `EditorSceneHandle.updateComponent`. */
+  function updateComponent(gameObject: GameObject, data: ComponentData, options?: { broadcast?: boolean }): void {
+    const { broadcast = true } = options ?? {};
+    const component = findComponentByType(gameObject, data.type);
+    if (!component) return;
+    updateComponentData(component, data);
+    if (broadcast) {
+      sendUpdateComponent(gameObject.id, data);
+    }
+    bumpTransformVersion();
   }
 
   function setSize(newWidth: number, newHeight: number): void {
@@ -811,5 +914,18 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
     _resetPhysics();
   }
 
-  return { engine, scene, camera, roots, loadScene, addGameObject, removeGameObject, setSize, dispose };
+  return {
+    engine,
+    scene,
+    camera,
+    roots,
+    loadScene,
+    addGameObject,
+    removeGameObject,
+    addComponent,
+    removeComponent,
+    updateComponent,
+    setSize,
+    dispose,
+  };
 }
