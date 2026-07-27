@@ -5,9 +5,15 @@ import { Topbar } from "./panels/Topbar.js";
 import { AssetsPanel } from "./panels/AssetsPanel.js";
 import { HostAgentPanel } from "./panels/HostAgentPanel.js";
 import { PwaUpdateBanner } from "./PwaUpdateBanner.js";
+import { useGlobalEditorShortcuts } from "./shortcuts/globalShortcuts.js";
 import "./App.css";
 
 export function App(): JSX.Element {
+  // Fase 8 — un solo listener keydown per tutto l'editor (Delete/Ctrl+S/
+  // Ctrl+O), montato qui perché queste scorciatoie non appartengono a un
+  // pannello specifico (vedi JSDoc in shortcuts/globalShortcuts.ts).
+  useGlobalEditorShortcuts();
+
   return (
     <div className="editor-shell">
       <Topbar />

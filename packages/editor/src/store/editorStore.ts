@@ -97,3 +97,24 @@ export function bumpTransformVersion(): void {
  * es. al bootstrap del Viewport) e il pannello.
  */
 export const assetsStore = createExternalStore<readonly AssetMeta[]>([]);
+
+/**
+ * Fase 8 — stato dell'ultima azione Save/Load, condiviso fra Topbar.tsx
+ * (bottoni) e shortcuts/globalShortcuts.ts (Ctrl+S/Ctrl+O da tastiera):
+ * prima di questa fase `Status` viveva come `useState` locale a Topbar.tsx,
+ * ma un salvataggio/caricamento innescato da tastiera deve mostrare lo
+ * stesso feedback testuale di uno innescato dal bottone — da cui
+ * l'estrazione qui, stesso motivo di `editorSceneHandleStore` sopra
+ * (due punti d'ingresso diversi verso la stessa azione, nessun antenato
+ * React comune da cui condividere altrimenti uno stato locale). Le
+ * funzioni che aggiornano questo store (`saveCurrentScene`/
+ * `loadPersistedSceneIntoEditor`) vivono in `actions/sceneActions.ts`.
+ */
+export type SaveLoadStatus =
+  | { kind: "idle" }
+  | { kind: "busy" }
+  | { kind: "success"; message: string }
+  | { kind: "empty" }
+  | { kind: "error"; message: string };
+
+export const saveLoadStatusStore = createExternalStore<SaveLoadStatus>({ kind: "idle" });

@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import type { MouseEvent } from "react";
 import { sceneRootsStore, selectionStore, editorSceneHandleStore } from "../store/editorStore.js";
 import { buildHierarchy, type HierarchyNode } from "../scene/hierarchy.js";
+import { ADD_GAME_OBJECT_OPTIONS } from "../scene/addOptions.js";
+import { buildSceneContextMenuItems } from "../scene/contextMenuItems.js";
+import { ContextMenu } from "./ContextMenu.js";
 import type { GameObject } from "@engine/core";
 
 /**
@@ -27,14 +31,20 @@ import type { GameObject } from "@engine/core";
  * e lo seleziona subito. Disabilitato finché `editorSceneHandleStore` è
  * `null` (stesso gate già usato da Topbar.tsx per Save/Load). Nessun sync
  * di rete ancora — arriva in 6C.2.
+ *
+ * Fase 8: click destro su una riga seleziona SEMPRE quell'oggetto (stesso
+ * comportamento del click sinistro, punto aperto 4 confermato — nessun
+ * caso in cui il tasto destro apra il menu senza selezionare prima) e apre
+ * `ContextMenu` con "Elimina"; click destro su area vuota del pannello
+ * (sotto le righe, o quando `nodes.length === 0`) apre lo stesso menu con
+ * le opzioni Empty/Cube/Sphere/Plane (`buildSceneContextMenuItems`,
+ * scene/contextMenuItems.ts — condiviso con Viewport.tsx, stesse azioni in
+ * entrambi i pannelli). `stopPropagation()` sulla riga impedisce che
+ * l'evento risalga fino al listener del pannello (altrimenti un click
+ * destro su una riga aprirebbe DUE menu sovrapposti). Il menu nativo del
+ * browser resta soppresso solo qui e in Viewport.tsx (punto aperto 5),
+ * mai in Inspector.tsx.
  */
-const ADD_OPTIONS: ReadonlyArray<{ kind: "empty" | "box" | "sphere" | "plane"; label: string }> = [
-  { kind: "empty", label: "Empty" },
-  { kind: "box", label: "Cube" },
-  { kind: "sphere", label: "Sphere" },
-  { kind: "plane", label: "Plane" },
-];
-
 export function Hierarchy(): JSX.Element {
   const roots = sceneRootsStore.useValue();
   const selected = selectionStore.useValue();
@@ -42,6 +52,7 @@ export function Hierarchy(): JSX.Element {
   const nodes = buildHierarchy(roots);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; target: GameObject | null } | null>(null);
 
   // Chiude il menu su un click/tap fuori dal suo contenitore — stesso
   // scopo di TunnelDialog.tsx (chiudibile), ma qui un popover leggero non
@@ -57,14 +68,30 @@ export function Hierarchy(): JSX.Element {
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [menuOpen]);
 
-  function onAdd(kind: (typeof ADD_OPTIONS)[number]["kind"]): void {
+  function onAdd(kind: (typeof ADD_GAME_OBJECT_OPTIONS)[number]["kind"]): void {
     if (!handle) return;
     handle.addGameObject(kind);
     setMenuOpen(false);
   }
 
+  // Fase 8 — click destro su area vuota del pannello (non su una riga: le
+  // righe chiamano `stopPropagation()` nel proprio handler, vedi
+  // HierarchyRow sotto, quindi questo scatta solo quando il tasto destro
+  // ha colpito il pannello stesso).
+  function onPanelContextMenu(event: MouseEvent<HTMLDivElement>): void {
+    event.preventDefault();
+    setContextMenu({ x: event.clientX, y: event.clientY, target: null });
+  }
+
+  function onRowContextMenu(event: MouseEvent, gameObject: GameObject): void {
+    event.preventDefault();
+    event.stopPropagation();
+    selectionStore.set(gameObject);
+    setContextMenu({ x: event.clientX, y: event.clientY, target: gameObject });
+  }
+
   return (
-    <div className="panel side-panel">
+    <div className="panel side-panel" onContextMenu={onPanelContextMenu}>
       <div className="hierarchy-header">
         <h2 className="panel-title">Hierarchy</h2>
         <div className="hierarchy-add" ref={menuRef}>
@@ -79,7 +106,7 @@ export function Hierarchy(): JSX.Element {
           </button>
           {menuOpen && (
             <ul className="hierarchy-add-menu">
-              {ADD_OPTIONS.map((option) => (
+              {ADD_GAME_OBJECT_OPTIONS.map((option) => (
                 <li key={option.kind}>
                   <button type="button" className="hierarchy-add-option" onClick={() => onAdd(option.kind)}>
                     {option.label}
@@ -95,9 +122,23 @@ export function Hierarchy(): JSX.Element {
       ) : (
         <ul className="hierarchy-tree">
           {nodes.map((node) => (
-            <HierarchyRow key={node.gameObject._object3D.id} node={node} selected={selected} depth={0} />
+            <HierarchyRow
+              key={node.gameObject._object3D.id}
+              node={node}
+              selected={selected}
+              depth={0}
+              onContextMenu={onRowContextMenu}
+            />
           ))}
         </ul>
+      )}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={buildSceneContextMenuItems(contextMenu.target, handle)}
+          onClose={() => setContextMenu(null)}
+        />
       )}
     </div>
   );
@@ -107,10 +148,12 @@ function HierarchyRow({
   node,
   selected,
   depth,
+  onContextMenu,
 }: {
   node: HierarchyNode;
   selected: GameObject | null;
   depth: number;
+  onContextMenu: (event: MouseEvent, gameObject: GameObject) => void;
 }): JSX.Element {
   const isSelected = selected === node.gameObject;
 
@@ -121,6 +164,7 @@ function HierarchyRow({
         className={isSelected ? "hierarchy-row hierarchy-row-selected" : "hierarchy-row"}
         style={{ paddingLeft: 8 + depth * 14 }}
         onClick={() => selectionStore.set(node.gameObject)}
+        onContextMenu={(event) => onContextMenu(event, node.gameObject)}
       >
         {node.gameObject.name}
       </button>
@@ -132,6 +176,7 @@ function HierarchyRow({
               node={child}
               selected={selected}
               depth={depth + 1}
+              onContextMenu={onContextMenu}
             />
           ))}
         </ul>
