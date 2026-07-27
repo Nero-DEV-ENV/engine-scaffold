@@ -1,34 +1,29 @@
 import { useEffect, useState } from "react";
-import { serializeScene } from "@engine/core";
-import { sceneRootsStore, editorSceneHandleStore } from "../store/editorStore.js";
-import { saveScene, loadScene as loadPersistedScene } from "../persistence/ScenePersistence.js";
+import { editorSceneHandleStore, saveLoadStatusStore } from "../store/editorStore.js";
+import { saveCurrentScene, loadPersistedSceneIntoEditor } from "../actions/sceneActions.js";
 import { connectionStore, connect, disconnect, presenceStore, mySessionIdStore } from "../network/collabClient.js";
 import { agentStateStore, ensureAgentMonitoring } from "../network/hostAgentClient.js";
 import { TunnelDialog, type TunnelDialogVariant } from "./TunnelDialog.js";
-
-type Status =
-  | { kind: "idle" }
-  | { kind: "busy" }
-  | { kind: "success"; message: string }
-  | { kind: "empty" }
-  | { kind: "error"; message: string };
 
 /**
  * Topbar — bottoni Save/Load (Fase 5B.3, chiude la Fase 5B) + bottone
  * Connect/Disconnect (Fase 6B.client-1, editor collaborativo Colyseus).
  *
- * Save legge `sceneRootsStore.get()` (i roots correnti, stessa fonte di
- * verità già usata da Hierarchy.tsx) — non serve l'handle per salvare.
- * Load invece deve invocare `EditorSceneHandle.loadScene()`, quindi dipende
- * da `editorSceneHandleStore`.
+ * Fase 8: la logica di Save/Load stessa (prima `onSave`/`onLoad` locali +
+ * `useState<Status>` qui) è stata spostata in `actions/sceneActions.ts` +
+ * `saveLoadStatusStore` (store/editorStore.ts), perché ora ha un secondo
+ * punto d'ingresso — la scorciatoia da tastiera Ctrl+S/Ctrl+O in
+ * `shortcuts/globalShortcuts.ts` — che deve condividere lo stesso feedback
+ * di stato mostrato qui sotto, non un proprio `useState` separato e
+ * invisibile a questo componente. Questo componente resta comunque
+ * l'unico posto che RENDE quello stato (messaggio/disabled dei bottoni).
  *
  * Entrambi i bottoni restano disabilitati finché `editorSceneHandleStore`
  * è `null` (Viewport non ha ancora finito il bootstrap, o è smontato):
  * Viewport.tsx popola/svuota `sceneRootsStore` ed `editorSceneHandleStore`
  * sempre insieme, nello stesso effect (vedi Viewport.tsx), quindi usare la
  * sola presenza dell'handle come gate per entrambi i bottoni è corretto e
- * non richiede una sottoscrizione separata a `sceneRootsStore` qui — serve
- * solo `.get()` al momento del click, dentro `onSave`.
+ * non richiede una sottoscrizione separata a `sceneRootsStore` qui.
  *
  * Connect/Disconnect legge `connectionStore` (network/collabClient.ts):
  * un solo bottone che alterna testo/azione in base allo stato
@@ -67,7 +62,7 @@ type Status =
  */
 export function Topbar(): JSX.Element {
   const handle = editorSceneHandleStore.useValue();
-  const [status, setStatus] = useState<Status>({ kind: "idle" });
+  const status = saveLoadStatusStore.useValue();
   const connection = connectionStore.useValue();
   const presence = presenceStore.useValue();
   const mySessionId = mySessionIdStore.useValue();
@@ -91,40 +86,6 @@ export function Topbar(): JSX.Element {
   const modeDisabled = nameInputDisabled;
   const hostReady = agentState.status === "running";
 
-  async function onSave(): Promise<void> {
-    setStatus({ kind: "busy" });
-    try {
-      const roots = sceneRootsStore.get();
-      const data = serializeScene(roots);
-      await saveScene(data);
-      setStatus({ kind: "success", message: "Scena salvata." });
-    } catch (error) {
-      setStatus({
-        kind: "error",
-        message: `Salvataggio fallito: ${error instanceof Error ? error.message : String(error)}`,
-      });
-    }
-  }
-
-  async function onLoad(): Promise<void> {
-    if (!handle) return;
-    setStatus({ kind: "busy" });
-    try {
-      const data = await loadPersistedScene();
-      if (!data) {
-        setStatus({ kind: "empty" });
-        return;
-      }
-      handle.loadScene(data);
-      setStatus({ kind: "success", message: "Scena caricata." });
-    } catch (error) {
-      setStatus({
-        kind: "error",
-        message: `Caricamento fallito: ${error instanceof Error ? error.message : String(error)}`,
-      });
-    }
-  }
-
   async function onToggleConnection(): Promise<void> {
     if (connection.status === "connected") {
       await disconnect();
@@ -142,10 +103,20 @@ export function Topbar(): JSX.Element {
     <header className="editor-topbar">
       <span className="editor-topbar-title">Engine Editor</span>
       <div className="topbar-actions">
-        <button type="button" className="topbar-button" disabled={!ready || busy} onClick={() => void onSave()}>
+        <button
+          type="button"
+          className="topbar-button"
+          disabled={!ready || busy}
+          onClick={() => void saveCurrentScene()}
+        >
           Save
         </button>
-        <button type="button" className="topbar-button" disabled={!ready || busy} onClick={() => void onLoad()}>
+        <button
+          type="button"
+          className="topbar-button"
+          disabled={!ready || busy}
+          onClick={() => void loadPersistedSceneIntoEditor()}
+        >
           Load
         </button>
         <input

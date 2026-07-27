@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { createEditorScene, type EditorSceneHandle } from "../scene/createEditorScene.js";
 import { sceneRootsStore, selectionStore, editorSceneHandleStore } from "../store/editorStore.js";
+import { buildSceneContextMenuItems } from "../scene/contextMenuItems.js";
+import { ContextMenu } from "./ContextMenu.js";
 
 /**
  * Viewport — pannello che ospita il canvas three.js.
@@ -35,10 +37,40 @@ import { sceneRootsStore, selectionStore, editorSceneHandleStore } from "../stor
  * viewport) mostrerebbe in Hierarchy dei GameObject della scena precedente
  * già distrutta da `Engine._resetAll()`, o la Topbar terrebbe un handle
  * ormai disposto.
+ *
+ * Fase 8: `onContextMenu` sul container (non sul canvas direttamente —
+ * `container` lo contiene sempre, l'evento nativo risale comunque fino a
+ * qui) sopprime il menu nativo del browser e apre `ContextMenu` con
+ * "Elimina" o "Aggiungi GameObject" (`buildSceneContextMenuItems`, stesso
+ * modulo condiviso con Hierarchy.tsx). Il target del menu è letto da
+ * `selectionStore.get()` al momento dell'evento, SENZA un raycast proprio:
+ * `onPointerDown`/`onPointerUp` in createEditorScene.ts non filtrano per
+ * `event.button`, quindi già aggiornano `selectionStore` in risposta a un
+ * click col tasto DESTRO esattamente come con quello sinistro — e
+ * l'ordine nativo degli eventi del browser (pointerdown → pointerup →
+ * contextmenu) garantisce che `selectionStore` rifletta già l'oggetto
+ * giusto quando `onContextMenu` legge il suo valore. Effect separato dal
+ * bootstrap async sopra: il container esiste subito al mount, non serve
+ * attendere che `createEditorScene` risolva per poter intercettare
+ * `contextmenu`.
  */
 export function Viewport(): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    function onContextMenu(event: MouseEvent): void {
+      event.preventDefault();
+      setContextMenu({ x: event.clientX, y: event.clientY });
+    }
+
+    container.addEventListener("contextmenu", onContextMenu);
+    return () => container.removeEventListener("contextmenu", onContextMenu);
+  }, []);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -88,6 +120,14 @@ export function Viewport(): JSX.Element {
         <div className="viewport-error" role="alert">
           Impossibile avviare il viewport: {error}
         </div>
+      )}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={buildSceneContextMenuItems(selectionStore.get(), editorSceneHandleStore.get())}
+          onClose={() => setContextMenu(null)}
+        />
       )}
     </div>
   );
