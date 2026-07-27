@@ -99,6 +99,16 @@ export interface SphereColliderData {
  */
 export type ComponentData = MeshRendererData | LightData | RigidBodyData | BoxColliderData | SphereColliderData;
 
+/**
+ * Alias per il discriminante di `ComponentData` (Fase 6D). Nome
+ * deliberatamente diverso sia da `GameObjectKind` (messages.ts/
+ * collabClient.ts, che discrimina empty/box/sphere/plane) sia da
+ * `ComponentType<T>` (core/Component.ts, un tipo COSTRUTTORE usato da
+ * `addComponent`, concetto non correlato) — per non creare ambiguità fra i
+ * tre nello stesso codebase.
+ */
+export type ComponentTypeName = ComponentData["type"];
+
 export interface GameObjectData {
   id: string;
   name: string;

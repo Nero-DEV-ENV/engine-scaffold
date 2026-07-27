@@ -1,7 +1,7 @@
 import { Client, getStateCallbacks } from "@colyseus/sdk";
 import type { Room, FetchFn } from "@colyseus/sdk";
-import type { TransformData } from "@engine/core";
-import { serializeTransform, applyTransformData } from "@engine/core";
+import type { TransformData, ComponentData, ComponentTypeName } from "@engine/core";
+import { serializeTransform, applyTransformData, Component, serializeComponent } from "@engine/core";
 import { createExternalStore, sceneRootsStore, editorSceneHandleStore, bumpTransformVersion } from "../store/editorStore.js";
 import { flattenGameObjects } from "../scene/hierarchy.js";
 
@@ -66,6 +66,13 @@ export type GameObjectKind = "empty" | "box" | "sphere" | "plane";
 export interface GameObjectMetaLike {
   kind: string;
   name: string;
+}
+
+/** Shape strutturale minima di un ComponentState ricevuto dal server (Fase 6D, stesso motivo di TransformStateLike sopra). */
+export interface ComponentStateLike {
+  gameObjectId: string;
+  type: string;
+  dataJson: string;
 }
 
 export type ConnectionState =
@@ -136,6 +143,18 @@ function isGameObjectKind(value: string): value is GameObjectKind {
   return GAME_OBJECT_KINDS.has(value as GameObjectKind);
 }
 
+const COMPONENT_TYPE_NAMES = new Set<ComponentTypeName>([
+  "MeshRenderer",
+  "Light",
+  "RigidBody",
+  "BoxCollider",
+  "SphereCollider",
+]);
+
+function isComponentTypeName(value: string): value is ComponentTypeName {
+  return COMPONENT_TYPE_NAMES.has(value as ComponentTypeName);
+}
+
 /**
  * Ricrea localmente (Fase 6C.2) il GameObject `gameObjectId` se non esiste
  * già in locale, leggendo `gameObjectMeta`/`transforms` DIRETTAMENTE da
@@ -193,6 +212,63 @@ function ensureGameObjectExists(gameObjectId: string): void {
       }
     : { id: gameObjectId, select: false, broadcast: false };
   handle.addGameObject(meta.kind, meta.name, addOptions);
+  // Fase 6D: applica SUBITO eventuali componenti già noti per questo
+  // gameObjectId al momento della ricostruzione — copre il caso in cui
+  // `components.onAdd` sia scattato PRIMA che questo GameObject esistesse
+  // in locale (ordine relativo fra le mappe non garantito, stesso discorso
+  // già documentato sopra per gameObjectMeta/transforms). Vedi JSDoc di
+  // `ensureComponentApplied` sotto per il perché è un UPSERT e non un
+  // semplice addComponent.
+  if (activeRoom) {
+    (activeRoom.state.components as Map<string, ComponentStateLike>).forEach((componentState) => {
+      if (componentState.gameObjectId === gameObjectId) {
+        ensureComponentApplied(componentState.gameObjectId, componentState.type, componentState.dataJson);
+      }
+    });
+  }
+}
+
+/**
+ * Applica un ComponentState ricevuto dal server (Fase 6D: hydrate iniziale,
+ * o addComponent/updateComponent proprio o di un ALTRO client) al
+ * GameObject locale corrispondente. UPSERT deliberato (non un semplice
+ * `addComponent`): un GameObject appena ricostruito da
+ * `ensureGameObjectExists` per un kind box/sphere/plane porta GIÀ un
+ * MeshRenderer di default (vedi `shapeForKind`/`addGameObject` in
+ * createEditorScene.ts) — se questa funzione chiamasse
+ * `handle.addComponent` incondizionatamente per quel MeshRenderer
+ * sincronizzato, `GameObject.addComponent` lancerebbe (due componenti
+ * dello stesso tipo sullo stesso GameObject non sono ammessi — vedi
+ * core/GameObject.ts). L'esistenza è verificata via `serializeComponent`
+ * (non una mappa tipo→classe, che duplicherebbe lo switch già esaustivo in
+ * SceneSerializer.ts): confronta il `type` di ogni componente già presente
+ * con quello ricevuto.
+ *
+ * Ignora silenziosamente (no-op, da ritentare più tardi) se il GameObject
+ * non esiste ancora in locale: succede quando questo callback scatta PRIMA
+ * che `transforms.onAdd`/`gameObjectMeta.onAdd` abbiano ricreato il
+ * GameObject per un oggetto aggiunto a runtime da un altro client — coperto
+ * dal secondo tentativo esplicito dentro `ensureGameObjectExists` sopra,
+ * subito dopo aver creato il GameObject.
+ */
+function ensureComponentApplied(gameObjectId: string, type: string, dataJson: string): void {
+  if (!isComponentTypeName(type)) return; // difesa: il server valida già `type` prima di scriverlo, non dovrebbe mai accadere
+  const go = resolveGameObjectById(gameObjectId);
+  if (!go) return;
+  const handle = editorSceneHandleStore.get();
+  if (!handle) return;
+  let data: ComponentData;
+  try {
+    data = JSON.parse(dataJson) as ComponentData;
+  } catch {
+    return; // dataJson malformato: non dovrebbe mai accadere (scritto solo da JSON.stringify server-side), difesa
+  }
+  const alreadyPresent = go.getComponents(Component).some((c) => serializeComponent(c)?.type === type);
+  if (alreadyPresent) {
+    handle.updateComponent(go, data, { broadcast: false });
+  } else {
+    handle.addComponent(go, data, { broadcast: false });
+  }
 }
 
 /**
@@ -228,11 +304,17 @@ function applyIncomingTransform(gameObjectId: string, transformState: TransformS
 }
 
 /** Costruisce il payload `hydrateScene` dalla scena locale corrente (un entry per GameObject, non un albero). */
-function buildHydratePayload(): { gameObjects: Array<{ id: string; transform: TransformData }> } {
+function buildHydratePayload(): {
+  gameObjects: Array<{ id: string; transform: TransformData; components: ComponentData[] }>;
+} {
   return {
     gameObjects: flattenGameObjects(sceneRootsStore.get()).map((go) => ({
       id: go.id,
       transform: serializeTransform(go),
+      components: go
+        .getComponents(Component)
+        .map(serializeComponent)
+        .filter((data): data is ComponentData => data !== null),
     })),
   };
 }
@@ -344,6 +426,36 @@ export async function connect(displayName?: string, transportOverride?: TunnelTr
     );
     detachFns.push(detachGameObjectMetaOnAdd);
 
+    // components (Fase 6D): onAdd copre sia l'hydrate iniziale
+    // (immediate:true, come le altre mappe sopra) sia un componente
+    // aggiunto in seguito da QUALUNQUE client (compreso quello locale
+    // stesso, per cui `ensureComponentApplied` è un no-op perché il
+    // componente esiste già — vedi JSDoc della funzione). L'onChange
+    // nested su `componentState` (non su un valore primitivo, a differenza
+    // di `editingBy` sotto: `ComponentState` è a sua volta uno Schema, con
+    // lo stesso motivo già verificato empiricamente per `transformState`
+    // sopra) cattura un `updateComponent` successivo, riassegnando
+    // `dataJson` — un campo primitivo diretto sull'istanza, non annidato,
+    // ma comunque bisognoso di un onChange esplicito e non catturato da
+    // `onAdd` (che scatta solo alla creazione dell'entry nella mappa).
+    const detachComponentsOnAdd = $(room.state).components!.onAdd((componentState: ComponentStateLike, key: string) => {
+      ensureComponentApplied(componentState.gameObjectId, componentState.type, componentState.dataJson);
+      $(componentState).onChange(() => {
+        ensureComponentApplied(componentState.gameObjectId, componentState.type, componentState.dataJson);
+      });
+      void key; // la chiave composita non serve qui: gameObjectId/type sono già campi propri di componentState
+    }, true);
+    detachFns.push(detachComponentsOnAdd);
+
+    const detachComponentsOnRemove = $(room.state).components!.onRemove((componentState: ComponentStateLike) => {
+      if (!isComponentTypeName(componentState.type)) return;
+      const handle = editorSceneHandleStore.get();
+      const go = resolveGameObjectById(componentState.gameObjectId);
+      if (!handle || !go) return;
+      handle.removeComponent(go, componentState.type, { broadcast: false });
+    });
+    detachFns.push(detachComponentsOnRemove);
+
     // Presence (Fase 6B.client-2): a differenza di `transforms`, i valori
     // di `clients` (ClientInfo: name+color) non vengono mai mutati in place
     // dopo l'assegnazione al join — non serve quindi alcun onChange nested
@@ -415,6 +527,28 @@ export async function connect(displayName?: string, transportOverride?: TunnelTr
     });
     detachFns.push(detachGameObjectsRemoved);
 
+    // componentsRemoved (Fase 6D, stesso fix di gameObjectsRemoved sopra,
+    // stesso motivo esatto): elenca le chiavi composite (`gameObjectId:type`)
+    // dei componenti che questo client ha provato a hydratare ma che il
+    // server ha scartato perché già rimossi definitivamente da qualcun
+    // altro PRIMA che questo client si connettesse.
+    const detachComponentsRemoved = room.onMessage("componentsRemoved", (payload: { componentKeys: string[] }) => {
+      const handle = editorSceneHandleStore.get();
+      if (!handle) return;
+      for (const key of payload.componentKeys) {
+        const separatorIndex = key.lastIndexOf(":");
+        if (separatorIndex < 0) continue;
+        const gameObjectId = key.slice(0, separatorIndex);
+        const type = key.slice(separatorIndex + 1);
+        if (!isComponentTypeName(type)) continue;
+        const go = resolveGameObjectById(gameObjectId);
+        if (go) {
+          handle.removeComponent(go, type, { broadcast: false });
+        }
+      }
+    });
+    detachFns.push(detachComponentsRemoved);
+
     room.send("hydrateScene", buildHydratePayload());
     connectionStore.set({ status: "connected" });
   } catch (error) {
@@ -458,10 +592,22 @@ export function sendTransformCommit(gameObjectId: string, transform: TransformDa
  * SUBITO dopo la creazione locale ottimistica, con `broadcast: true`
  * (default) — mai per la ricostruzione remota di un oggetto già arrivato
  * dal server (quella chiamata usa `broadcast: false`).
+ *
+ * `components` (Fase 6D): i componenti CORRENTI del GameObject appena
+ * creato localmente (es. il MeshRenderer di default di Cube/Sphere/Plane)
+ * — vedi JSDoc di `AddGameObjectMessage.components` in messages.ts
+ * (server) sul perché sono inviati nello STESSO messaggio invece di un
+ * `addComponent` separato subito dopo.
  */
-export function sendAddGameObject(id: string, kind: GameObjectKind, name: string, transform: TransformData): void {
+export function sendAddGameObject(
+  id: string,
+  kind: GameObjectKind,
+  name: string,
+  transform: TransformData,
+  components: ComponentData[],
+): void {
   if (!activeRoom || connectionStore.get().status !== "connected") return;
-  activeRoom.send("addGameObject", { id, kind, name, transform });
+  activeRoom.send("addGameObject", { id, kind, name, transform, components });
 }
 
 /**
@@ -471,6 +617,30 @@ export function sendAddGameObject(id: string, kind: GameObjectKind, name: string
 export function sendRemoveGameObject(gameObjectId: string): void {
   if (!activeRoom || connectionStore.get().status !== "connected") return;
   activeRoom.send("removeGameObject", { gameObjectId });
+}
+
+/**
+ * Invia un addComponent al server (Fase 6D) — no-op se non connessi. Da
+ * chiamare da `EditorSceneHandle.addComponent` (createEditorScene.ts)
+ * SUBITO dopo la creazione locale ottimistica, con `broadcast: true`
+ * (default) — mai per un componente già arrivato dal server (quella
+ * chiamata usa `broadcast: false`, vedi `ensureComponentApplied` sopra).
+ */
+export function sendAddComponent(gameObjectId: string, component: ComponentData): void {
+  if (!activeRoom || connectionStore.get().status !== "connected") return;
+  activeRoom.send("addComponent", { gameObjectId, component });
+}
+
+/** Invia un removeComponent al server (Fase 6D) — no-op se non connessi. Stesso discorso di `sendAddComponent` per `broadcast`. */
+export function sendRemoveComponent(gameObjectId: string, type: ComponentTypeName): void {
+  if (!activeRoom || connectionStore.get().status !== "connected") return;
+  activeRoom.send("removeComponent", { gameObjectId, type });
+}
+
+/** Invia un updateComponent al server (Fase 6D) — no-op se non connessi. Stesso discorso di `sendAddComponent` per `broadcast`. */
+export function sendUpdateComponent(gameObjectId: string, component: ComponentData): void {
+  if (!activeRoom || connectionStore.get().status !== "connected") return;
+  activeRoom.send("updateComponent", { gameObjectId, component });
 }
 
 /**

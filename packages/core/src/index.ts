@@ -40,11 +40,15 @@ export {
   deserializeScene,
   serializeTransform,
   applyTransformData,
+  serializeComponent,
+  applyComponentData,
+  updateComponentData,
 } from "./serialization/SceneSerializer.js";
 export type {
   SceneData,
   GameObjectData,
   ComponentData,
+  ComponentTypeName,
   TransformData,
   Vector3Data,
   QuaternionData,

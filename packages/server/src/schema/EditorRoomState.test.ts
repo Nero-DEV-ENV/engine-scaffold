@@ -1,12 +1,19 @@
 import { describe, it, expect } from "vitest";
-import type { TransformData } from "@engine/core";
+import type { TransformData, ComponentData } from "@engine/core";
 import {
   EditorRoomState,
   TransformState,
   toTransformState,
   applyTransformData,
   toGameObjectMetaState,
+  componentKey,
+  toComponentState,
+  applyComponentDataToState,
 } from "./EditorRoomState.js";
+
+function sampleComponent(radius = 0.5): ComponentData {
+  return { type: "SphereCollider", radius, friction: 0.5, restitution: 0, isTrigger: false };
+}
 
 function sampleTransform(offset = 0): TransformData {
   return {
@@ -73,5 +80,41 @@ describe("EditorRoomState — gameObjectMeta (Fase 6C.2)", () => {
     const roomState = new EditorRoomState();
     expect(() => roomState.gameObjectMeta.delete("go-mai-esistito")).not.toThrow();
     expect(roomState.gameObjectMeta.size).toBe(0);
+  });
+});
+
+describe("EditorRoomState — components (Fase 6D)", () => {
+  it("componentKey costruisce la chiave composita gameObjectId:type", () => {
+    expect(componentKey("go-1", "SphereCollider")).toBe("go-1:SphereCollider");
+  });
+
+  it("toComponentState riporta correttamente gameObjectId/type/dataJson", () => {
+    const state = toComponentState("go-1", sampleComponent(0.5));
+    expect(state.gameObjectId).toBe("go-1");
+    expect(state.type).toBe("SphereCollider");
+    expect(JSON.parse(state.dataJson)).toEqual(sampleComponent(0.5));
+  });
+
+  it("applyComponentDataToState muta il dataJson di un'istanza ComponentState esistente invece di sostituirla", () => {
+    const state = toComponentState("go-1", sampleComponent(0.5));
+    const before = state;
+    applyComponentDataToState(state, sampleComponent(2));
+    expect(state).toBe(before); // stessa istanza, solo dataJson è cambiato
+    expect(JSON.parse(state.dataJson).radius).toBe(2);
+  });
+
+  it("EditorRoomState.components è una MapSchema vuota all'inizializzazione", () => {
+    const roomState = new EditorRoomState();
+    expect(roomState.components.size).toBe(0);
+  });
+
+  it("set/get/delete su components funzionano per la chiave composita", () => {
+    const roomState = new EditorRoomState();
+    const key = componentKey("go-1", "SphereCollider");
+    roomState.components.set(key, toComponentState("go-1", sampleComponent()));
+    expect(roomState.components.has(key)).toBe(true);
+    expect(roomState.components.get(key)?.type).toBe("SphereCollider");
+    roomState.components.delete(key);
+    expect(roomState.components.has(key)).toBe(false);
   });
 });

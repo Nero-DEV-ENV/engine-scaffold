@@ -6,6 +6,9 @@ import {
   toTransformState,
   applyTransformData,
   toGameObjectMetaState,
+  toComponentState,
+  applyComponentDataToState,
+  componentKey,
 } from "./schema/EditorRoomState.js";
 import {
   isCommitTransformMessage,
@@ -14,14 +17,16 @@ import {
   isEndEditMessage,
   isAddGameObjectMessage,
   isRemoveGameObjectMessage,
+  isAddComponentMessage,
+  isRemoveComponentMessage,
+  isUpdateComponentMessage,
 } from "./messages.js";
 import { resolveDisplayName, pickColor } from "./identity.js";
 
 /**
  * EditorRoom — Fase 6A (ciclo di vita) + 6B (stato Transform sincronizzato)
- * + 6C.2 (sync aggiunta/rimozione GameObject). Aggiunta/rimozione/modifica
- * di COMPONENTI su un GameObject già esistente resta fuori scope — arriva
- * in 6D.
+ * + 6C.2 (sync aggiunta/rimozione GameObject) + 6D (sync aggiunta/
+ * rimozione/modifica di componenti su un GameObject già esistente).
  *
  * Modello di autorità (punto 2): server-authoritative. In 6B questo si
  * traduce concretamente in: il client non muta mai `this.state` per conto
@@ -57,6 +62,23 @@ export class EditorRoom extends Room<{ state: EditorRoomState }> {
    */
   private readonly removedGameObjectIds = new Set<string>();
 
+  /**
+   * Fase 6D — mirror esatto di `removedGameObjectIds` sopra, ma per
+   * componenti: chiavi composite (`gameObjectId:type`, vedi `componentKey`
+   * in EditorRoomState.ts) di componenti rimossi DEFINITIVAMENTE tramite
+   * `removeComponent`, per tutta la vita di questa Room. Stesso motivo
+   * esatto: senza questo Set, un client che si connette DOPO che un
+   * componente pre-esistente (es. il MeshRenderer di "demo-cube") è stato
+   * rimosso da un altro client lo re-inserirebbe in `components` col
+   * proprio `hydrateScene` (che invia SEMPRE i componenti correnti della
+   * scena locale bootstrap, ignara della rimozione altrui). Non serve
+   * invece tracciare qui i componenti di un GameObject rimosso per intero
+   * (`removeGameObject` sotto): quel gameObjectId è già in
+   * `removedGameObjectIds`, e `hydrateScene` salta i componenti di un
+   * GameObject respinto senza doverli controllare uno per uno.
+   */
+  private readonly removedComponentKeys = new Set<string>();
+
   override onCreate(): void {
     this.setState(new EditorRoomState());
     logActivity({ type: "room_created", roomId: this.roomId, timestamp: Date.now() });
@@ -78,14 +100,32 @@ export class EditorRoom extends Room<{ state: EditorRoomState }> {
       if (!isHydrateSceneMessage(message)) return;
       let addedCount = 0;
       const rejectedIds: string[] = [];
+      const rejectedComponentKeys: string[] = [];
       for (const go of message.gameObjects) {
         if (this.removedGameObjectIds.has(go.id)) {
           rejectedIds.push(go.id);
+          // I componenti di un GameObject respinto non vengono processati:
+          // il GameObject stesso non esisterà comunque per il client
+          // richiedente (vedi gameObjectsRemoved sotto), quindi non c'è
+          // motivo di controllare i suoi componenti uno per uno qui.
           continue;
         }
         if (!this.state.transforms.has(go.id)) {
           this.state.transforms.set(go.id, toTransformState(go.transform));
           addedCount++;
+        }
+        // Fase 6D: hydrate dei componenti CORRENTI di questo GameObject,
+        // stessa idempotenza/rejection di `transforms` sopra ma a livello
+        // di singolo componente (chiave composita, vedi `componentKey`).
+        for (const componentData of go.components) {
+          const key = componentKey(go.id, componentData.type);
+          if (this.removedComponentKeys.has(key)) {
+            rejectedComponentKeys.push(key);
+            continue;
+          }
+          if (!this.state.components.has(key)) {
+            this.state.components.set(key, toComponentState(go.id, componentData));
+          }
         }
       }
       if (addedCount > 0) {
@@ -103,6 +143,11 @@ export class EditorRoom extends Room<{ state: EditorRoomState }> {
       // hydratare) non deve generare traffico extra.
       if (rejectedIds.length > 0) {
         client.send("gameObjectsRemoved", { gameObjectIds: rejectedIds });
+      }
+      // Fase 6D: stesso discorso di gameObjectsRemoved sopra, ma per
+      // componenti — vedi JSDoc di ComponentsRemovedMessage in messages.ts.
+      if (rejectedComponentKeys.length > 0) {
+        client.send("componentsRemoved", { componentKeys: rejectedComponentKeys });
       }
     });
 
@@ -167,6 +212,13 @@ export class EditorRoom extends Room<{ state: EditorRoomState }> {
       if (this.state.transforms.has(message.id)) return;
       this.state.transforms.set(message.id, toTransformState(message.transform));
       this.state.gameObjectMeta.set(message.id, toGameObjectMetaState(message.kind, message.name));
+      // Fase 6D: componenti iniziali (opzionali) — vedi JSDoc di
+      // `AddGameObjectMessage.components` in messages.ts sul perché sono
+      // sincronizzati nello STESSO messaggio invece di un `addComponent`
+      // separato subito dopo.
+      for (const componentData of message.components ?? []) {
+        this.state.components.set(componentKey(message.id, componentData.type), toComponentState(message.id, componentData));
+      }
       logActivity({
         type: "gameobject_added",
         roomId: this.roomId,
@@ -186,6 +238,14 @@ export class EditorRoom extends Room<{ state: EditorRoomState }> {
     // è un no-op sicuro quando l'oggetto rimosso era pre-esistente (mai
     // avuto un'entry lì) — verificato in EditorRoomState.test.ts.
     // `editingBy.delete` è incondizionato per evitare lock orfani.
+    //
+    // Fase 6D: ripulisce anche ogni entry di `components` appartenente a
+    // questo gameObjectId (raccogli-poi-cancella, stesso stile della
+    // pulizia di `editingBy` orfano in `onLeave` sotto, per non mutare
+    // `components` durante la propria iterazione). Nessuna aggiunta a
+    // `removedComponentKeys` necessaria qui: il gameObjectId è già in
+    // `removedGameObjectIds`, quindi `hydrateScene` salta i suoi componenti
+    // a monte (vedi sopra), senza bisogno di tracciarli uno per uno.
     this.onMessage("removeGameObject", (client, message: unknown) => {
       if (!isRemoveGameObjectMessage(message)) return;
       if (!this.state.transforms.has(message.gameObjectId)) return;
@@ -195,11 +255,87 @@ export class EditorRoom extends Room<{ state: EditorRoomState }> {
       this.state.gameObjectMeta.delete(message.gameObjectId);
       this.state.editingBy.delete(message.gameObjectId);
       this.removedGameObjectIds.add(message.gameObjectId);
+      const orphanedComponentKeys = Array.from(this.state.components.keys()).filter(
+        (key) => this.state.components.get(key)?.gameObjectId === message.gameObjectId,
+      );
+      for (const key of orphanedComponentKeys) {
+        this.state.components.delete(key);
+      }
       logActivity({
         type: "gameobject_removed",
         roomId: this.roomId,
         sessionId: client.sessionId,
         gameObjectId: message.gameObjectId,
+        timestamp: Date.now(),
+      });
+    });
+
+    // addComponent (Fase 6D): aggiunge un componente a un GameObject già
+    // esistente. Ignorato silenziosamente se: il gameObjectId non esiste
+    // (mai hydratato/aggiunto), il tipo di componente esiste già su quel
+    // gameObjectId (mirror del vincolo di GameObject.addComponent nel
+    // motore — vedi core/GameObject.ts), o il gameObjectId è lockato da un
+    // ALTRO client (stesso pattern di removeGameObject sopra).
+    this.onMessage("addComponent", (client, message: unknown) => {
+      if (!isAddComponentMessage(message)) return;
+      if (!this.state.transforms.has(message.gameObjectId)) return;
+      const lockHolder = this.state.editingBy.get(message.gameObjectId);
+      if (lockHolder && lockHolder !== client.sessionId) return;
+      const key = componentKey(message.gameObjectId, message.component.type);
+      if (this.state.components.has(key)) return;
+      this.state.components.set(key, toComponentState(message.gameObjectId, message.component));
+      logActivity({
+        type: "component_added",
+        roomId: this.roomId,
+        sessionId: client.sessionId,
+        gameObjectId: message.gameObjectId,
+        componentType: message.component.type,
+        timestamp: Date.now(),
+      });
+    });
+
+    // removeComponent (Fase 6D): rimuove un componente esistente. Ignorato
+    // silenziosamente se il gameObjectId non esiste, il componente non è
+    // presente (mai aggiunto, o già rimosso da un altro client nel
+    // frattempo), o il gameObjectId è lockato da un ALTRO client.
+    this.onMessage("removeComponent", (client, message: unknown) => {
+      if (!isRemoveComponentMessage(message)) return;
+      if (!this.state.transforms.has(message.gameObjectId)) return;
+      const lockHolder = this.state.editingBy.get(message.gameObjectId);
+      if (lockHolder && lockHolder !== client.sessionId) return;
+      const key = componentKey(message.gameObjectId, message.type);
+      if (!this.state.components.has(key)) return;
+      this.state.components.delete(key);
+      this.removedComponentKeys.add(key);
+      logActivity({
+        type: "component_removed",
+        roomId: this.roomId,
+        sessionId: client.sessionId,
+        gameObjectId: message.gameObjectId,
+        componentType: message.type,
+        timestamp: Date.now(),
+      });
+    });
+
+    // updateComponent (Fase 6D): aggiorna i campi di un componente già
+    // presente — semantica OPPOSTA di addComponent (fallisce se il
+    // componente NON esiste ancora, invece che se esiste già). Stesso
+    // controllo di lock delle altre due.
+    this.onMessage("updateComponent", (client, message: unknown) => {
+      if (!isUpdateComponentMessage(message)) return;
+      if (!this.state.transforms.has(message.gameObjectId)) return;
+      const lockHolder = this.state.editingBy.get(message.gameObjectId);
+      if (lockHolder && lockHolder !== client.sessionId) return;
+      const key = componentKey(message.gameObjectId, message.component.type);
+      const componentState = this.state.components.get(key);
+      if (!componentState) return;
+      applyComponentDataToState(componentState, message.component);
+      logActivity({
+        type: "component_updated",
+        roomId: this.roomId,
+        sessionId: client.sessionId,
+        gameObjectId: message.gameObjectId,
+        componentType: message.component.type,
         timestamp: Date.now(),
       });
     });
