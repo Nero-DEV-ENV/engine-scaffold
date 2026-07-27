@@ -743,3 +743,83 @@ body {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* Fase 7 — pannello Assets, riga a piena larghezza sotto Hierarchy/
+   Viewport/Inspector (vedi App.tsx/AssetsPanel.tsx), stesso stile di
+   posizionamento di .host-agent-panel sopra (flex:0 0 auto + max-height +
+   scroll interno), ma senza il collapse-toggle: l'elenco asset resta
+   sempre visibile, non è un log da poter nascondere. */
+.assets-panel {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  max-height: 180px;
+  padding: 8px 12px;
+  background: #17181b;
+  border-top: 1px solid #2a2d32;
+}
+
+.assets-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.assets-header .panel-title {
+  margin: 0;
+}
+
+/* Input file nativo nascosto: il click viene innescato dal bottone
+   "Importa" (stesso pattern del bottone "+" di Hierarchy.tsx, ma qui il
+   controllo reale è un <input type="file"> nativo, non un menu — serve
+   comunque restare nel DOM/focusabile per la semantica dell'accessibilità
+   nativa del browser, quindi "display:none" non "position:absolute" fuori
+   schermo. */
+.assets-file-input {
+  display: none;
+}
+
+.assets-error {
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: #e0663f;
+}
+
+.assets-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+}
+
+.assets-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid #2a2d32;
+  font-size: 12px;
+}
+
+.assets-row:last-child {
+  border-bottom: none;
+}
+
+.assets-row-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #e4e6eb;
+}
+
+.assets-row-kind {
+  flex: 0 0 auto;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #7d828c;
+}

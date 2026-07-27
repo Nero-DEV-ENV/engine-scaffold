@@ -116,6 +116,22 @@ export interface GameObjectData {
   transform: TransformData;
   components: ComponentData[];
   children: GameObjectData[];
+  /**
+   * Fase 7 — id nell'asset store dell'editor (packages/editor/src/
+   * persistence/AssetPersistence.ts) del modello GLTF/GLB da cui questo
+   * GameObject è stato istanziato, se presente. Opzionale e assente per
+   * ogni GameObject "normale" (primitive MeshRenderer, luci, ecc.): non un
+   * componente, perché non descrive uno stato del GameObject stesso ma la
+   * PROVENIENZA della sua gerarchia three.js — che non passa da
+   * `components`/`children` (i figli three.js importati da un GLTF non
+   * sono GameObject, vedi il filtro `userData["__gameObject"]` in
+   * SceneSerializer.ts) e quindi non sarebbe altrimenti ricostruibile da
+   * un SceneData salvato. La ricostruzione vera e propria (rifetch
+   * dell'asset binario + riattacco della gerarchia three.js) è
+   * responsabilità dell'editor, non di questo modulo (core non ha accesso
+   * a IndexedDB/fetch) — vedi `attachGLTF` in rendering/AssetLoader.ts.
+   */
+  sourceAssetId?: string;
 }
 
 /**

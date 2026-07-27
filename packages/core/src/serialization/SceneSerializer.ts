@@ -101,6 +101,12 @@ function serializeGameObject(go: GameObject): GameObjectData {
     transform: serializeTransform(go),
     components,
     children,
+    // Fase 7 — campo OMESSO (non `undefined` esplicito) quando assente:
+    // così un GameObject "normale" produce un JSON identico a prima di
+    // questa fase, invece di aggiungere ovunque una chiave sourceAssetId
+    // sempre `undefined` che JSON.stringify comunque ometterebbe da sé ma
+    // che renderebbe il dato in-memory meno pulito da ispezionare/testare.
+    ...(go.sourceAssetId ? { sourceAssetId: go.sourceAssetId } : {}),
   };
 }
 
@@ -256,6 +262,14 @@ function deserializeGameObject(
   created.push(go);
   go.setActive(data.active);
   applyTransformData(go, data.transform);
+  // Fase 7 — la gerarchia three.js importata (mesh/materiali del GLTF) NON
+  // viene ricostruita qui: questo modulo non ha accesso a IndexedDB/fetch
+  // (vedi il commento su GameObjectData.sourceAssetId in types.ts). Il
+  // GameObject risulta quindi temporaneamente "vuoto" visivamente subito
+  // dopo deserializeScene — è compito del chiamante in packages/editor
+  // (scene/createEditorScene.ts) rilevare `sourceAssetId` e riattaccare il
+  // modello in modo asincrono con `attachGLTF`.
+  if (data.sourceAssetId) go.sourceAssetId = data.sourceAssetId;
   if (parent) go.transform.setParent(parent.transform);
 
   for (const componentData of data.components) {

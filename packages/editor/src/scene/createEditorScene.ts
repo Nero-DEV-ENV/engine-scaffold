@@ -15,10 +15,18 @@ import {
   _resetPhysics,
 } from "@engine/core";
 import type { SceneData, TransformData, MeshShape, ComponentData, ComponentTypeName } from "@engine/core";
-import { serializeTransform, applyTransformData, serializeComponent, applyComponentData, updateComponentData } from "@engine/core";
+import {
+  serializeTransform,
+  applyTransformData,
+  serializeComponent,
+  applyComponentData,
+  updateComponentData,
+  attachGLTF,
+} from "@engine/core";
 import { findOwningGameObject, flattenGameObjects } from "./hierarchy.js";
 import { loadSceneReplacingCurrent } from "./sceneLoad.js";
 import { selectionStore, sceneRootsStore, bumpTransformVersion } from "../store/editorStore.js";
+import { getAssetObjectURL } from "../assets/assetsController.js";
 import {
   sendTransformCommit,
   sendBeginEdit,
@@ -187,6 +195,27 @@ export interface EditorSceneHandle {
    * già). Stesso significato di `options.broadcast` delle altre funzioni.
    */
   updateComponent(gameObject: GameObject, data: ComponentData, options?: { broadcast?: boolean }): void;
+  /**
+   * Fase 7 — crea un nuovo GameObject radice a partire da un asset GLTF/GLB
+   * già importato nel pannello Assets: `assetId` è l'id restituito da
+   * `assetsController.importAssetFile` (persistito in IndexedDB, vedi
+   * AssetPersistence.ts), `name` il nome mostrato in Hierarchy/Inspector
+   * (di norma il nome del file). A differenza di `addGameObject`, questa
+   * funzione è ASINCRONA: il caricamento della gerarchia three.js
+   * (`attachGLTF`) richiede di risolvere l'asset a un object URL e passare
+   * da GLTFLoader, entrambi asincroni. Il GameObject risultante ha
+   * `sourceAssetId` impostato ad `assetId` (letto da SceneSerializer al
+   * momento del Save, per poter ricostruire il modello dopo un futuro
+   * Load — vedi il commento su `GameObjectData.sourceAssetId` in
+   * @engine/core) ed è selezionato automaticamente al termine del
+   * caricamento, stesso comportamento di default di `addGameObject`.
+   *
+   * Nessun parametro `broadcast`/sync collaborativo in questa fase (punto
+   * non coperto dai punti aperti 1-5 confermati): l'import di asset resta
+   * un'operazione locale al singolo editor, non sincronizzata via
+   * Colyseus fra client collegati alla stessa sessione.
+   */
+  addImportedModel(assetId: string, name: string): Promise<GameObject>;
   /** Da chiamare ad ogni resize del container (via ResizeObserver, non window resize — vedi Viewport.tsx). */
   setSize(width: number, height: number): void;
   /** Ferma il loop, rilascia renderer/controls/listener e libera il registry globale dei GameObject (vedi Scene.ts). */
@@ -733,6 +762,11 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
     // contiene ancora) o lo rimuove (se non più presente), invece di
     // lasciare box/etichette a puntare a Object3D ormai disposti.
     updateLockVisuals();
+    // Fase 7 — fire-and-forget deliberato: `loadScene` resta sincrona nella
+    // sua firma pubblica (Topbar.tsx la chiama senza await, vedi JSDoc
+    // sull'interfaccia sopra), la ricostruzione visiva dei modelli
+    // importati arriva un momento dopo via `rehydrateImportedModels`.
+    void rehydrateImportedModels(newRoots);
   }
 
   /**
@@ -842,6 +876,63 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
     bumpTransformVersion();
   }
 
+  /**
+   * Fase 7 — vedi JSDoc su `EditorSceneHandle.addImportedModel`. Crea il
+   * GameObject "contenitore" PRIMA di risolvere l'object URL: se
+   * `getAssetObjectURL`/`attachGLTF` dovessero fallire (asset rimosso nel
+   * frattempo, file GLTF malformato), l'oggetto resta comunque nella
+   * scena/Hierarchy — vuoto visivamente ma selezionabile/spostabile,
+   * invece di sparire silenziosamente o lasciare la Promise rigettata non
+   * gestita. Lo stesso compromesso di tolleranza già descritto in
+   * `getAssetObjectURL` (assets/assetsController.ts) per un asset
+   * mancante durante un Load.
+   */
+  async function addImportedModel(assetId: string, name: string): Promise<GameObject> {
+    const go = new GameObject(name);
+    go.sourceAssetId = assetId;
+    scene.add(go._object3D);
+    roots = [...roots, go];
+    rootObject3Ds = roots.map((r) => r._object3D);
+    sceneRootsStore.set(roots);
+    selectionStore.set(go);
+
+    const url = await getAssetObjectURL(assetId);
+    if (url) {
+      try {
+        await attachGLTF(go, url);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }
+    return go;
+  }
+
+  /**
+   * Fase 7 — dopo un `loadScene`, ogni GameObject deserializzato con
+   * `sourceAssetId` ha già id/transform corretti (ricostruiti in modo
+   * sincrono da `deserializeScene`, vedi SceneSerializer.ts) ma NESSUNA
+   * gerarchia three.js visibile: il formato SceneData non la serializza
+   * (vedi il commento su `GameObjectData.sourceAssetId` in @engine/core).
+   * Questa funzione la riattacca in modo asincrono, GameObject per
+   * GameObject, senza bloccare il resto del load (che resta sincrono,
+   * vedi `loadScene` sotto: chiamata con `void`, non `await`ata dal
+   * chiamante). Un asset non più presente in IndexedDB (rimosso dal
+   * pannello Assets dopo il Save) lascia semplicemente quel GameObject
+   * senza mesh, stessa tolleranza di `addImportedModel` sopra.
+   */
+  async function rehydrateImportedModels(newRoots: readonly GameObject[]): Promise<void> {
+    for (const go of flattenGameObjects(newRoots)) {
+      if (!go.sourceAssetId) continue;
+      const url = await getAssetObjectURL(go.sourceAssetId);
+      if (!url) continue;
+      try {
+        await attachGLTF(go, url);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }
+  }
+
   function setSize(newWidth: number, newHeight: number): void {
     if (newWidth <= 0 || newHeight <= 0) return;
     camera.aspect = newWidth / newHeight;
@@ -925,6 +1016,7 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
     addComponent,
     removeComponent,
     updateComponent,
+    addImportedModel,
     setSize,
     dispose,
   };
