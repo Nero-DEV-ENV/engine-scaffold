@@ -10,6 +10,7 @@ import { radToDeg, degToRad, roundForDisplay, parseNumericInput } from "./transf
 import { Component, serializeComponent, RigidBodyType } from "@engine/core";
 import type { ComponentData, ComponentTypeName, GameObject } from "@engine/core";
 import type { EditorSceneHandle } from "../scene/createEditorScene.js";
+import { PlusIcon, RemoveIcon } from "../icons.js";
 
 /**
  * Fase 6D — un componente per l'Inspector: opzioni del menu "Aggiungi
@@ -107,7 +108,7 @@ export function Inspector(): JSX.Element {
 
   if (!selected) {
     return (
-      <div className="panel side-panel">
+      <div className="panel side-panel inspector-panel">
         <h2 className="panel-title">Inspector</h2>
         <p className="panel-placeholder">Nessuna selezione.</p>
       </div>
@@ -163,12 +164,19 @@ export function Inspector(): JSX.Element {
   }
 
   return (
-    <div className="panel side-panel">
+    <div className="panel side-panel inspector-panel">
       <h2 className="panel-title">Inspector</h2>
       <div className="inspector-header">
         <p className="inspector-object-name">{selected.name}</p>
-        <button type="button" className="inspector-delete-button" disabled={!handle} onClick={onDelete}>
-          Elimina
+        <button
+          type="button"
+          className="inspector-delete-button"
+          disabled={!handle}
+          onClick={onDelete}
+          aria-label={`Elimina ${selected.name}`}
+          title="Elimina"
+        >
+          <RemoveIcon />
         </button>
       </div>
       <Vector3Row title="Position" x={position.x} y={position.y} z={position.z} onChangeAxis={commitPosition} />
@@ -304,9 +312,10 @@ function ComponentsSection({
             className="hierarchy-add-button"
             disabled={!handle || availableOptions.length === 0}
             aria-label="Aggiungi componente"
+            title="Aggiungi componente"
             onClick={() => setMenuOpen((open) => !open)}
           >
-            +
+            <PlusIcon />
           </button>
           {menuOpen && (
             <ul className="hierarchy-add-menu">
@@ -362,14 +371,24 @@ function ComponentRow({
     handle.removeComponent(gameObject, componentData.type);
   }
 
+  // Fase 9 — estratto in una const: prima calcolato inline solo nello
+  // <span> del titolo, ora serve anche nell'aria-label del bottone "×"
+  // (che ha sostituito il testo visibile "Rimuovi").
+  const componentLabel = COMPONENT_OPTIONS.find((option) => option.type === componentData.type)?.label ?? componentData.type;
+
   return (
     <div className="inspector-component">
       <div className="inspector-component-header">
-        <span className="inspector-component-title">
-          {COMPONENT_OPTIONS.find((option) => option.type === componentData.type)?.label ?? componentData.type}
-        </span>
-        <button type="button" className="inspector-delete-button" disabled={!handle} onClick={onRemove}>
-          Rimuovi
+        <span className="inspector-component-title">{componentLabel}</span>
+        <button
+          type="button"
+          className="inspector-delete-button"
+          disabled={!handle}
+          onClick={onRemove}
+          aria-label={`Rimuovi ${componentLabel}`}
+          title="Rimuovi"
+        >
+          <RemoveIcon />
         </button>
       </div>
       <ComponentFields data={componentData} onCommit={commit} />

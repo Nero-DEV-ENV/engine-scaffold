@@ -316,9 +316,7 @@ function hasVisibleGeometry(object3D: THREE.Object3D): boolean {
  * Fase 6C.1 — forma di default per ciascuna primitiva creabile da
  * `EditorSceneHandle.addGameObject`. Dimensioni scelte per essere
  * ragionevoli fianco a fianco con la scena demo esistente (Cube 1×1×1 e
- * Sphere raggio 0.5 in createEditorScene sopra usano gli stessi valori;
- * Plane 1×1 deliberatamente più piccolo del Ground demo 10×10, per non
- * essere confuso con un secondo pavimento).
+ * Sphere raggio 0.5 in createEditorScene sopra usano gli stessi valori).
  */
 function shapeForKind(kind: "box" | "sphere" | "plane"): MeshShape {
   switch (kind) {
@@ -435,8 +433,8 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
   window.addEventListener("keyup", onAltTrackedKeyUp);
   window.addEventListener("blur", onWindowBlur);
 
-  // Fase 6B.client-1: id ESPLICITI e stabili per tutti e cinque i
-  // GameObject della scena demo (le due luci qui sotto + Ground/Cube/Sphere
+  // Fase 6B.client-1: id ESPLICITI e stabili per tutti e quattro i
+  // GameObject della scena demo (le due luci qui sotto + Cube/Sphere
   // poco più in basso), invece del `crypto.randomUUID()` di default —
   // scoperto un problema reale con uno smoke-test in due tab browser: due
   // istanze fresche dell'editor generavano id casuali diversi per "lo
@@ -460,25 +458,28 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
   // packages/core/src/physics/Physics.ts): se l'Engine iniziasse a
   // ticchettare (o un Load caricasse RigidBody/Collider) prima che il WASM
   // di Rapier sia pronto, Physics.step() fallirebbe rumorosamente. Nessuno
-  // dei tre GameObject demo qui sotto ha ancora componenti fisici — questa
+  // dei due GameObject demo qui sotto ha ancora componenti fisici — questa
   // fase collega solo il World, la fisica reale nell'editor arriva oggi
   // solo da un Load di una scena salvata che contiene RigidBody/Collider
   // (vedi Inspector.tsx: l'editor non ha ancora una UI "Add Component").
   await initPhysics();
 
-  // Ground/Cube/Sphere usano MeshRenderer (Fase 5) invece di una THREE.Mesh
+  // Fase 9 — griglia del viewport stile Unity al posto del vecchio
+  // "Ground" (GameObject Plane 10×10 grigio scuro): un `THREE.GridHelper`
+  // è un aiuto puramente visivo dell'EDITOR, non uno GameObject della
+  // scena — aggiunto direttamente a `scene`, MAI a `roots`/Hierarchy,
+  // quindi non selezionabile (il raycast di selezione sotto scorre solo
+  // `rootObject3Ds`, mappato da `roots`), non salvato/caricato da
+  // SceneSerializer, e non compare come riga in Hierarchy.tsx — esattamente
+  // come la griglia di Scene view in Unity, che non è un GameObject.
+  const viewportGrid = new THREE.GridHelper(10, 10, 0x53565d, 0x33363c);
+  scene.add(viewportGrid);
+
+  // Cube/Sphere usano MeshRenderer (Fase 5) invece di una THREE.Mesh
   // costruita a mano: la rappresentazione visiva (forma/colore) diventa così
   // un dato leggibile da SceneSerializer, non più codice imperativo qui —
   // condizione necessaria perché la scena sopravviva a un ciclo save/load
-  // (deliverable di questa fase). MeshRenderer.shape "plane" è già
-  // orizzontale di default (vedi MeshRenderer.ts), quindi la rotazione
-  // correttiva che prima veniva applicata qui a mano non serve più.
-  const groundGO = new GameObject("Ground", "demo-ground");
-  const groundRenderer = groundGO.addComponent(MeshRenderer);
-  groundRenderer.shape = { kind: "plane", width: 10, height: 10 };
-  groundRenderer.color = 0x2f3237;
-  scene.add(groundGO._object3D);
-
+  // (deliverable di questa fase).
   const cubeGO = new GameObject("Cube", "demo-cube");
   cubeGO.transform.setPosition(-1, 0.5, 0);
   const cubeRenderer = cubeGO.addComponent(MeshRenderer);
@@ -511,7 +512,7 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
   // quando la scena viene ricaricata da IndexedDB — vedi anche
   // `rootObject3Ds` sotto, che deve restare sincronizzato per il raycast
   // di selezione.
-  let roots: GameObject[] = [groundGO, cubeGO, sphereGO, lighting.ambient, lighting.keyLight];
+  let roots: GameObject[] = [cubeGO, sphereGO, lighting.ambient, lighting.keyLight];
 
   // ---- Gizmo di trasformazione (Fase 4C) --------------------------------
   // Istanziato PRIMA di registrare qui sotto i listener pointerdown/pointerup
@@ -1203,6 +1204,8 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
     transformControls.dispose();
     gizmoHelper.dispose();
     scene.remove(gizmoHelper);
+    scene.remove(viewportGrid);
+    viewportGrid.dispose();
     if (highlightHelper) {
       scene.remove(highlightHelper);
       highlightHelper.dispose();

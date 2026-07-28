@@ -5,6 +5,7 @@ import { buildHierarchy, type HierarchyNode } from "../scene/hierarchy.js";
 import { ADD_GAME_OBJECT_OPTIONS } from "../scene/addOptions.js";
 import { buildSceneContextMenuItems } from "../scene/contextMenuItems.js";
 import { ContextMenu } from "./ContextMenu.js";
+import { PlusIcon } from "../icons.js";
 import type { GameObject } from "@engine/core";
 
 /**
@@ -91,7 +92,7 @@ export function Hierarchy(): JSX.Element {
   }
 
   return (
-    <div className="panel side-panel" onContextMenu={onPanelContextMenu}>
+    <div className="panel side-panel hierarchy-panel" onContextMenu={onPanelContextMenu}>
       <div className="hierarchy-header">
         <h2 className="panel-title">Hierarchy</h2>
         <div className="hierarchy-add" ref={menuRef}>
@@ -100,9 +101,10 @@ export function Hierarchy(): JSX.Element {
             className="hierarchy-add-button"
             disabled={!handle}
             aria-label="Aggiungi GameObject"
+            title="Aggiungi GameObject"
             onClick={() => setMenuOpen((open) => !open)}
           >
-            +
+            <PlusIcon />
           </button>
           {menuOpen && (
             <ul className="hierarchy-add-menu">
