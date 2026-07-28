@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect } from "react";
 import {
   agentStateStore,
   agentConnectionStore,
-  agentLogsStore,
   ensureAgentMonitoring,
   startAgentServer,
   stopAgentServer,
@@ -11,13 +10,20 @@ import {
 } from "../network/hostAgentClient.js";
 
 /**
- * HostAgentPanel — Fase 6F.3.a: pannello dedicato in basso nell'editor per
- * avviare/fermare packages/server tramite @engine/host-agent (processo
- * separato, avviato una tantum dall'utente via start-hidden.ps1 — vedi
- * commento in cima a network/hostAgentClient.ts). Bottoni Start/Stop +
- * riquadro log scrollabile ("terminale interno"): l'utente non deve mai
- * aprire/tenere aperto un terminale esterno che potrebbe chiudere per
- * errore.
+ * HostAgentPanel — Fase 6F.3.a: avvia/ferma packages/server tramite
+ * @engine/host-agent (processo separato, avviato una tantum dall'utente
+ * via start-hidden.ps1 — vedi commento in cima a network/hostAgentClient.ts).
+ *
+ * Fase 9 — su decisione utente, il pannello con collapse-toggle + log
+ * scrollabile ("terminale interno", introdotto in 6F.3.a) è stato
+ * sostituito da una fascia sottile in fondo, stile status bar di Unity
+ * (vedi screenshot di riferimento): solo pallino di stato online/offline +
+ * bottoni Start/Stop "in rilievo". Il log NON è più raggiungibile da
+ * questa UI in questa fase (nessun modo di espanderlo) — resta letto da
+ * `agentLogsStore` (hostAgentClient.ts) per un'eventuale reintroduzione
+ * futura, solo non più consumato qui. Il messaggio di stato descrittivo
+ * (`statusLabel`) resta comunque disponibile per screen reader/tooltip
+ * (`title` + testo `.sr-only`), non solo come colore del pallino.
  *
  * Indipendente dal bottone Connect/Disconnect di Topbar.tsx: quello serve
  * a unirsi alla Room Colyseus (client), questo al ciclo di vita del
@@ -26,55 +32,40 @@ import {
 export function HostAgentPanel(): JSX.Element {
   const connection = agentConnectionStore.useValue();
   const state = agentStateStore.useValue();
-  const logs = agentLogsStore.useValue();
-  const [collapsed, setCollapsed] = useState(false);
-  const logRef = useRef<HTMLPreElement | null>(null);
 
   useEffect(() => {
     ensureAgentMonitoring();
   }, []);
 
-  useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [logs]);
-
   const agentReachable = connection === "connected";
   const canStart = agentReachable && (state.status === "idle" || state.status === "error");
   const canStop =
     agentReachable && (state.status === "building" || state.status === "starting" || state.status === "running");
+  const label = statusLabel(connection, state);
 
   return (
-    <section className="host-agent-panel" aria-label="Controllo server locale">
-      <div className="host-agent-header">
+    <footer className="host-status-bar" aria-label="Controllo server locale">
+      <span
+        className={`host-status-dot host-status-dot-${statusClass(connection, state)}`}
+        title={label}
+        role="img"
+        aria-label={label}
+      />
+      <span className="sr-only">{label}</span>
+      <div className="host-status-actions">
         <button
           type="button"
-          className="host-agent-collapse-toggle"
-          onClick={() => setCollapsed((value) => !value)}
-          aria-label={collapsed ? "Espandi pannello server locale" : "Comprimi pannello server locale"}
+          className="host-status-button"
+          disabled={!canStart}
+          onClick={() => void startAgentServer()}
         >
-          {collapsed ? "▸" : "▾"}
+          Start
         </button>
-        <span className="host-agent-title">Server locale</span>
-        <span className={`host-agent-status host-agent-status-${statusClass(connection, state)}`}>
-          {statusLabel(connection, state)}
-        </span>
-        <div className="host-agent-actions">
-          <button type="button" className="topbar-button" disabled={!canStart} onClick={() => void startAgentServer()}>
-            Start
-          </button>
-          <button type="button" className="topbar-button" disabled={!canStop} onClick={() => void stopAgentServer()}>
-            Stop
-          </button>
-        </div>
+        <button type="button" className="host-status-button" disabled={!canStop} onClick={() => void stopAgentServer()}>
+          Stop
+        </button>
       </div>
-      {!collapsed && (
-        <pre className="host-agent-log" aria-live="polite" ref={logRef}>
-          {logs.length === 0
-            ? "Nessuna riga di log ancora."
-            : logs.map((entry) => `[${entry.stream}] ${entry.line}`).join("\n")}
-        </pre>
-      )}
-    </section>
+    </footer>
   );
 }
 

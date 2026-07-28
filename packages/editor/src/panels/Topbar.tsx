@@ -4,6 +4,7 @@ import { saveCurrentScene, loadPersistedSceneIntoEditor } from "../actions/scene
 import { connectionStore, connect, disconnect, presenceStore, mySessionIdStore } from "../network/collabClient.js";
 import { agentStateStore, ensureAgentMonitoring } from "../network/hostAgentClient.js";
 import { TunnelDialog, type TunnelDialogVariant } from "./TunnelDialog.js";
+import { SaveIcon, LoadIcon } from "../icons.js";
 
 /**
  * Topbar — bottoni Save/Load (Fase 5B.3, chiude la Fase 5B) + bottone
@@ -105,19 +106,23 @@ export function Topbar(): JSX.Element {
       <div className="topbar-actions">
         <button
           type="button"
-          className="topbar-button"
+          className="icon-button"
           disabled={!ready || busy}
           onClick={() => void saveCurrentScene()}
+          aria-label="Save"
+          title="Save"
         >
-          Save
+          <SaveIcon />
         </button>
         <button
           type="button"
-          className="topbar-button"
+          className="icon-button"
           disabled={!ready || busy}
           onClick={() => void loadPersistedSceneIntoEditor()}
+          aria-label="Load"
+          title="Load"
         >
-          Load
+          <LoadIcon />
         </button>
         <input
           type="text"
