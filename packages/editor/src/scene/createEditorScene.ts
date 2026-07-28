@@ -25,7 +25,13 @@ import {
 } from "@engine/core";
 import { findOwningGameObject, flattenGameObjects } from "./hierarchy.js";
 import { loadSceneReplacingCurrent } from "./sceneLoad.js";
-import { selectionStore, sceneRootsStore, bumpTransformVersion } from "../store/editorStore.js";
+import {
+  selectionStore,
+  sceneRootsStore,
+  bumpTransformVersion,
+  activeToolStore,
+  type EditorTool,
+} from "../store/editorStore.js";
 import { getAssetObjectURL } from "../assets/assetsController.js";
 import {
   sendTransformCommit,
@@ -179,6 +185,68 @@ export interface EditorSceneHandle {
    * server SUBITO dopo la creazione locale ottimistica. Quando `false`,
    * usato dalla ricostruzione remota in collabClient.ts.
    */
+  /**
+   * Fase 8A — duplica `gameObject`: crea un nuovo GameObject con lo STESSO
+   * nome (nessuna deduplicazione/suffisso incrementale stile Unity " (1)"
+   * — deliberata deviazione da Unity, coerente con la convenzione già
+   * stabilita altrove in questo file: "non c'è deduplicazione dei nomi,
+   * l'id, non il nome, è l'identificatore univoco di un GameObject", vedi
+   * JSDoc di `addGameObject`), stesso Transform (posizione/rotazione/scala
+   * IDENTICHE all'originale — nessun offset automatico) e stessi
+   * componenti CORRENTI (via `serializeComponentsOf`/`applyComponentData`,
+   * gli stessi già usati dal percorso "ricostruzione remota" più sotto).
+   *
+   * Duplicazione SHALLOW, non ricorsiva sull'eventuale sottoalbero di
+   * GameObject figli: il clone diventa sempre un nuovo GameObject radice
+   * (`roots`), anche se `gameObject` sorgente avesse un parent (caso oggi
+   * irraggiungibile da nessuna azione dell'editor — nessuna UI crea
+   * GameObject annidati, solo `deserializeScene`/Load lo permette
+   * strutturalmente). Riparentare correttamente il clone sotto lo stesso
+   * parent dell'originale è rimandato alla futura fase Group/Ungroup (che
+   * introdurrà comunque riparenting come funzionalità dedicata, vedi
+   * documento di continuazione Fase 8A/8B) invece di una gestione parziale
+   * qui.
+   *
+   * Se `gameObject.sourceAssetId` è impostato (modello GLTF importato,
+   * Fase 7), il clone lo eredita e la sua rappresentazione visiva viene
+   * ricostruita in modo asincrono con lo stesso `rehydrateImportedModels`
+   * già usato da `loadScene` — MA, esattamente come `addImportedModel`
+   * (Fase 7, vedi il suo JSDoc), questo resta un dettaglio visivo
+   * puramente LOCALE: non sincronizzato via Colyseus (stesso limite già
+   * esistente per qualunque asset importato, non introdotto da questa
+   * fase). Un client remoto riceve comunque un GameObject con lo stesso
+   * Transform/id/nome/sourceAssetId, ma senza la mesh — stessa tolleranza
+   * "vuoto visivamente ma selezionabile" già descritta per un asset
+   * mancante.
+   *
+   * `options.broadcast` (default `true`, stesso significato delle altre
+   * funzioni di questa interfaccia): quando `true`, invia lo STESSO
+   * messaggio `addGameObject` (kind `"empty"`, per non far aggiungere al
+   * destinatario un MeshRenderer di default che verrebbe subito
+   * sovrascritto — i componenti reali viaggiano già per intero nel campo
+   * `components` dello stesso messaggio) invece di introdurre un nuovo
+   * tipo di messaggio Colyseus: riusa integralmente il protocollo/percorso
+   * di ricostruzione remota già esistente e testato per `addGameObject`,
+   * nessuna modifica a EditorRoom.ts/collabClient.ts necessaria per questa
+   * fase.
+   */
+  duplicateGameObject(gameObject: GameObject, options?: { broadcast?: boolean }): GameObject;
+  /**
+   * Fase 8B (tasto F) — ricentra la camera su `gameObject`: sposta il punto
+   * di orbita (`OrbitCameraController.target`) sul centro del suo bounding
+   * box (calcolato sulla gerarchia Object3D reale, via `THREE.Box3`, non
+   * solo sulla propria Mesh diretta — coerente con `hasVisibleGeometry`
+   * sopra, che already cammina l'intero sottoalbero per lo stesso motivo),
+   * e riposiziona la camera sulla STESSA direzione di vista corrente
+   * (nessun reset dell'angolo di orbita, solo ricentraggio + distanza
+   * adattata al bounding box) — stesso comportamento del tasto F di Unity.
+   *
+   * Per un GameObject senza geometria visibile (es. una luce, un empty):
+   * nessun bounding box calcolabile, si centra sulla sua `Transform.position`
+   * con una distanza di default ragionevole invece di provare a "inquadrare"
+   * un volume che non esiste.
+   */
+  focusOnGameObject(gameObject: GameObject): void;
   addComponent(gameObject: GameObject, data: ComponentData, options?: { broadcast?: boolean }): Component;
   /**
    * Fase 6D — rimuove il componente di tipo `type` da `gameObject`, se
@@ -222,8 +290,19 @@ export interface EditorSceneHandle {
   dispose(): void;
 }
 
-/** Spostamento massimo (px) fra pointerdown e pointerup perché conti come click di selezione e non come drag dell'orbit control. */
-const CLICK_MOVE_THRESHOLD_PX = 4;
+/**
+ * Spostamento massimo (px) fra pointerdown e pointerup perché conti come
+ * click (di selezione, sotto — o di menu contestuale, vedi Viewport.tsx) e
+ * non come drag dell'OrbitCameraController. Esportata da Fase 8B-fix: prima
+ * usata solo qui per il click sinistro di selezione, ora riusata anche da
+ * Viewport.tsx per lo stesso identico problema sul tasto destro (vedi il suo
+ * JSDoc/fix per il dettaglio del bug: senza questa guardia, un drag col
+ * tasto destro per orbitare/pan-nare apriva ANCHE il menu contestuale
+ * all'evento nativo `contextmenu`, che il browser genera comunque al
+ * rilascio del tasto destro indipendentemente da quanto ci si è mossi nel
+ * frattempo).
+ */
+export const CLICK_MOVE_THRESHOLD_PX = 4;
 
 function hasVisibleGeometry(object3D: THREE.Object3D): boolean {
   let found = false;
@@ -321,6 +400,40 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
 
   const cameraController = new OrbitCameraController(camera, renderer.domElement);
   cameraController.setTarget(0, 0.5, 0);
+
+  // ---- Orbit condizionato ad Alt (Fase 8B, stile Unity) -----------------
+  // Di default il tasto sinistro non orbita (`false` qui sotto): resta
+  // libero per il click di selezione/drag del gizmo (vedi onPointerDown/
+  // onPointerUp più sotto). Orbita solo mentre Alt è tenuto premuto — tasto
+  // destro (pan) e rotellina (zoom) restano sempre attivi, non condizionati
+  // da questo listener (vedi JSDoc su `setLeftMouseRotateEnabled` in
+  // core/rendering/CameraController.ts).
+  cameraController.setLeftMouseRotateEnabled(false);
+  function onAltTrackedKeyDown(event: KeyboardEvent): void {
+    if (event.key !== "Alt") return;
+    // Sopprime il comportamento nativo del browser sul tasto Alt (in Chrome/
+    // Firefox/Edge attiva l'accesso da tastiera al menu del browser quando
+    // non esplicitamente soppresso) — senza questo preventDefault, un Alt+drag
+    // apriva il menu del browser invece di orbitare (bug scoperto in
+    // smoke-test). Stesso preventDefault anche su keyup sotto: il browser può
+    // attivare il menu alla pressione O al rilascio a seconda del browser.
+    event.preventDefault();
+    cameraController.setLeftMouseRotateEnabled(true);
+  }
+  function onAltTrackedKeyUp(event: KeyboardEvent): void {
+    if (event.key !== "Alt") return;
+    event.preventDefault();
+    cameraController.setLeftMouseRotateEnabled(false);
+  }
+  // `window.blur` (es. Alt+Tab fuori dal browser): il keyup di Alt non
+  // arriva mai in quel caso, senza questo listener l'orbit resterebbe
+  // "incollato" attivo anche a tasto rilasciato fuori foco.
+  function onWindowBlur(): void {
+    cameraController.setLeftMouseRotateEnabled(false);
+  }
+  window.addEventListener("keydown", onAltTrackedKeyDown);
+  window.addEventListener("keyup", onAltTrackedKeyUp);
+  window.addEventListener("blur", onWindowBlur);
 
   // Fase 6B.client-1: id ESPLICITI e stabili per tutti e cinque i
   // GameObject della scena demo (le due luci qui sotto + Ground/Cube/Sphere
@@ -457,6 +570,32 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
   // di editingByStore, non solo di selectionStore.
   const unsubscribeGizmoLock = editingByStore.subscribe(() => {
     updateGizmoTarget(selectionStore.get());
+  });
+
+  // ---- Tool attivo: Hand/Move/Rotate/Scale (Fase 8B, Q/W/E/R) -----------
+  // "move"/"rotate"/"scale" mappano 1:1 sulle modalità native di
+  // TransformControls ("translate"/"rotate"/"scale" — solo il primo nome
+  // differisce). "hand" nasconde e disabilita il gizmo SENZA toccare
+  // `selectionStore`/`updateGizmoTarget` sopra: l'oggetto resta selezionato
+  // (Inspector continua a mostrarlo), semplicemente non ci sono maniglie di
+  // manipolazione — stesso comportamento distintivo dello strumento Hand di
+  // Unity. Non tocca il mapping dei tasti mouse (Alt+drag per orbitare resta
+  // invariato indipendentemente dal tool attivo — semplificazione dichiarata
+  // per questa fase, vedi documento di continuazione Fase 8A/8B).
+  function updateActiveTool(tool: EditorTool): void {
+    if (tool === "hand") {
+      transformControls.enabled = false;
+      gizmoHelper.visible = false;
+      return;
+    }
+    transformControls.enabled = true;
+    gizmoHelper.visible = true;
+    transformControls.setMode(tool === "move" ? "translate" : tool);
+  }
+
+  updateActiveTool(activeToolStore.get());
+  const unsubscribeActiveTool = activeToolStore.subscribe(() => {
+    updateActiveTool(activeToolStore.get());
   });
 
   // Disabilita l'OrbitCameraController mentre si trascina il gizmo:
@@ -805,6 +944,84 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
   }
 
   /**
+   * Fase 8A — vedi JSDoc su `EditorSceneHandle.duplicateGameObject`.
+   * Nome/Transform/componenti clonati dall'originale, id nuovo generato dal
+   * costruttore di `GameObject` (stesso pattern ottimistico client-side già
+   * usato da `addGameObject`/`addImportedModel`). Il clone diventa sempre
+   * un nuovo root (vedi JSDoc sull'interfaccia sul perché non si tenta di
+   * preservare un eventuale parent dell'originale in questa fase).
+   */
+  function duplicateGameObject(gameObject: GameObject, options?: { broadcast?: boolean }): GameObject {
+    const { broadcast = true } = options ?? {};
+    const clone = new GameObject(gameObject.name);
+    applyTransformData(clone, serializeTransform(gameObject));
+    for (const data of serializeComponentsOf(gameObject)) {
+      applyComponentData(clone, data);
+    }
+    if (gameObject.sourceAssetId) {
+      clone.sourceAssetId = gameObject.sourceAssetId;
+    }
+    scene.add(clone._object3D);
+    roots = [...roots, clone];
+    rootObject3Ds = roots.map((r) => r._object3D);
+    sceneRootsStore.set(roots);
+    selectionStore.set(clone);
+    if (clone.sourceAssetId) {
+      // Fire-and-forget, stesso stile di loadScene/rehydrateImportedModels:
+      // la ricostruzione visiva del modello importato arriva un momento
+      // dopo, la funzione resta sincrona nella firma pubblica.
+      void rehydrateImportedModels([clone]);
+    }
+    if (broadcast) {
+      // Kind "empty" deliberato: i componenti reali del clone viaggiano
+      // già per intero qui sotto, non serve (anzi andrebbe evitato) il
+      // MeshRenderer di default che kind "box"/"sphere"/"plane"
+      // aggiungerebbero lato ricostruzione remota.
+      sendAddGameObject(clone.id, "empty", clone.name, serializeTransform(clone), serializeComponentsOf(clone));
+    }
+    return clone;
+  }
+
+  /**
+   * Fase 8B — vedi JSDoc su `EditorSceneHandle.focusOnGameObject`. Distanza
+   * minima 2 unità anche per un bounding box piccolissimo (es. lo Sphere
+   * demo, raggio 0.5): evita di incollare la camera addosso all'oggetto.
+   * `FOCUS_FALLBACK_DISTANCE`/`FOCUS_FIT_PADDING` non sono costanti di
+   * modulo: usate solo qui, tenerle locali evita di esporre dettagli
+   * implementativi ad altre funzioni di questo file.
+   */
+  function focusOnGameObject(gameObject: GameObject): void {
+    const FOCUS_FALLBACK_DISTANCE = 4;
+    const FOCUS_FIT_PADDING = 2.5;
+    const FOCUS_MIN_DISTANCE = 2;
+
+    const box = new THREE.Box3().setFromObject(gameObject._object3D);
+    let center: THREE.Vector3;
+    let distance: number;
+    if (box.isEmpty()) {
+      center = gameObject.transform.position.clone();
+      distance = FOCUS_FALLBACK_DISTANCE;
+    } else {
+      center = box.getCenter(new THREE.Vector3());
+      const radius = box.getBoundingSphere(new THREE.Sphere()).radius;
+      distance = Math.max(radius * FOCUS_FIT_PADDING, FOCUS_MIN_DISTANCE);
+    }
+
+    // Mantiene l'angolo di vista corrente: sposta la camera lungo la STESSA
+    // direzione dal vecchio target, solo riscalata alla nuova distanza.
+    const viewDirection = camera.position.clone().sub(cameraController.target);
+    if (viewDirection.lengthSq() === 0) {
+      // Camera esattamente sul target (edge case, in pratica irraggiungibile
+      // da UI): direzione di fallback per evitare un vettore nullo.
+      viewDirection.set(0, 0, 1);
+    }
+    viewDirection.normalize().multiplyScalar(distance);
+
+    camera.position.copy(center).add(viewDirection);
+    cameraController.setTarget(center.x, center.y, center.z);
+  }
+
+  /**
    * Fase 6C.1 — vedi JSDoc su `EditorSceneHandle.removeGameObject`.
    * `Array.prototype.filter` restituisce SEMPRE un nuovo array (anche
    * quando nessun elemento viene scartato, es. `gameObject` non è un root
@@ -954,9 +1171,13 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
     engine.stop();
     renderer.domElement.removeEventListener("pointerdown", onPointerDown);
     renderer.domElement.removeEventListener("pointerup", onPointerUp);
+    window.removeEventListener("keydown", onAltTrackedKeyDown);
+    window.removeEventListener("keyup", onAltTrackedKeyUp);
+    window.removeEventListener("blur", onWindowBlur);
     unsubscribeSelection();
     unsubscribeGizmoTarget();
     unsubscribeGizmoLock();
+    unsubscribeActiveTool();
     unsubscribeEditingByVisuals();
     unsubscribePresenceVisuals();
     // Rimuove ogni highlight+etichetta di lock ancora attivo (Fase
@@ -1012,6 +1233,8 @@ export async function createEditorScene(container: HTMLElement): Promise<EditorS
     roots,
     loadScene,
     addGameObject,
+    duplicateGameObject,
+    focusOnGameObject,
     removeGameObject,
     addComponent,
     removeComponent,

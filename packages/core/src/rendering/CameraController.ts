@@ -1,4 +1,5 @@
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { MOUSE } from "three";
 import type { PerspectiveCamera, Vector3 } from "three";
 
 /**
@@ -54,6 +55,23 @@ export class OrbitCameraController {
   setTarget(x: number, y: number, z: number): void {
     this.controls.target.set(x, y, z);
     this.controls.update();
+  }
+
+  /**
+   * Fase 8B — abilita/disabilita l'orbit sul drag del tasto sinistro del
+   * mouse: quando `false`, il tasto sinistro non ha alcuna azione mappata
+   * (`mouseButtons.LEFT = null`), il tasto destro (pan) e la rotellina
+   * (zoom) restano sempre attivi indipendentemente da questo flag — solo
+   * la ROTATE sul tasto sinistro è condizionata. Pensato per l'editor
+   * (createEditorScene.ts), che tiene questo `false` di default e lo
+   * abilita solo mentre Alt è premuto (stile Unity: Alt+drag sinistro per
+   * orbitare, tasto sinistro libero per il click di selezione) — nessun
+   * consumer generico di questa classe (es. apps/playground) è tenuto ad
+   * usarlo, resta `true`/orbit-su-drag-semplice di default finché non
+   * viene chiamato esplicitamente.
+   */
+  setLeftMouseRotateEnabled(enabled: boolean): void {
+    this.controls.mouseButtons.LEFT = enabled ? MOUSE.ROTATE : null;
   }
 
   /**

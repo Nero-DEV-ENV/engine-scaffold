@@ -21,9 +21,10 @@ import { ADD_GAME_OBJECT_OPTIONS } from "./addOptions.js";
  * silenziosi invece di lanciare, coerente con `onDelete`/`onAdd` già
  * esistenti in Inspector.tsx/Hierarchy.tsx.
  *
- * Fase 8A (duplicazione, Ctrl+D) aggiungerà qui una voce "Duplica" quando
- * `target` non è null — non prima, perché `EditorSceneHandle` non ha
- * ancora un metodo di duplicazione (verificato in fase di bugcheck).
+ * Fase 8A: aggiunta la voce "Duplica" (oltre a "Elimina") quando `target`
+ * non è null, che chiama `EditorSceneHandle.duplicateGameObject` — stesso
+ * trattamento no-op silenzioso di `handle` nullo già usato da "Elimina"
+ * sotto (bootstrap Viewport).
  */
 export function buildSceneContextMenuItems(
   target: GameObject | null,
@@ -31,6 +32,10 @@ export function buildSceneContextMenuItems(
 ): ContextMenuItem[] {
   if (target) {
     return [
+      {
+        label: "Duplica",
+        onSelect: () => handle?.duplicateGameObject(target),
+      },
       {
         label: "Elimina",
         onSelect: () => handle?.removeGameObject(target),

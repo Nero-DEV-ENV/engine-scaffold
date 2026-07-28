@@ -118,3 +118,18 @@ export type SaveLoadStatus =
   | { kind: "error"; message: string };
 
 export const saveLoadStatusStore = createExternalStore<SaveLoadStatus>({ kind: "idle" });
+
+/**
+ * Fase 8B — tool attivo nel Viewport, stile barra strumenti di Unity
+ * (Q/W/E/R): `"move"`/`"rotate"`/`"scale"` corrispondono 1:1 alle modalità
+ * `"translate"/"rotate"/"scale"` di `TransformControls` (createEditorScene.ts
+ * traduce il nome), `"hand"` nasconde/disabilita il gizmo di trasformazione
+ * senza deselezionare l'oggetto (stesso comportamento distintivo dello
+ * strumento Hand di Unity: nessuna maniglia di manipolazione visibile).
+ * Default `"move"`: stessa modalità già hardcoded di `TransformControls`
+ * prima di questa fase, quindi introdurre questo store non cambia il
+ * comportamento di default esistente.
+ */
+export type EditorTool = "hand" | "move" | "rotate" | "scale";
+
+export const activeToolStore = createExternalStore<EditorTool>("move");
