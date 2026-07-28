@@ -2,14 +2,21 @@ import { createServer, type IncomingMessage, type ServerResponse, type Server } 
 import { WebSocketServer, WebSocket } from "ws";
 import type { ProcessSupervisor, AgentState, LogEntry } from "./processSupervisor.js";
 import type { TunnelHostSession, TunnelHostState } from "./tunnelHostSession.js";
+import type { ProjectFolderSession } from "./projectFolder.js";
 
 /**
  * httpServer.ts — Fase 6F.3.a (endpoint /server/*) + Fase 6F.3.b (endpoint
- * /tunnel/host/*). Espone ProcessSupervisor e TunnelHostSession su HTTP+WS
- * in locale — pensato per essere raggiunto SOLO dall'editor sulla stessa
- * macchina dell'host (a differenza del tunnel WebRTC vero e proprio, che è
- * un problema diverso: quello espone la Room Colyseus al guest da remoto,
- * questo espone il controllo locale al browser dello stesso utente).
+ * /tunnel/host/*) + Fase 10A (endpoint /project/*, spike project folder
+ * loader). Espone ProcessSupervisor, TunnelHostSession e ora
+ * ProjectFolderSession su HTTP+WS in locale — pensato per essere raggiunto
+ * SOLO dall'editor sulla stessa macchina dell'host (a differenza del
+ * tunnel WebRTC vero e proprio, che è un problema diverso: quello espone
+ * la Room Colyseus al guest da remoto, questo espone il controllo locale
+ * al browser dello stesso utente).
+ *
+ * /project/* non ha un canale WS dedicato (a differenza di /server/logs e
+ * /tunnel/host/state) — Fase 10A non ha ancora un consumer che necessiti
+ * push in tempo reale; la UI di Fase 10B interrogherà via HTTP a comando.
  *
  * DUE canali WS separati invece di uno condiviso: "/server/logs" porta
  * AgentState+LogEntry (stdout/stderr di un processo figlio spawnato),
@@ -33,9 +40,13 @@ import type { TunnelHostSession, TunnelHostState } from "./tunnelHostSession.js"
 type ControlMessage = { kind: "state"; state: AgentState } | { kind: "log"; entry: LogEntry };
 type TunnelControlMessage = { kind: "state"; state: TunnelHostState };
 
-export function createHostAgentServer(supervisor: ProcessSupervisor, tunnelHost: TunnelHostSession): Server {
+export function createHostAgentServer(
+  supervisor: ProcessSupervisor,
+  tunnelHost: TunnelHostSession,
+  projectFolder: ProjectFolderSession,
+): Server {
   const server = createServer((req, res) => {
-    void handleHttp(req, res, supervisor, tunnelHost);
+    void handleHttp(req, res, supervisor, tunnelHost, projectFolder);
   });
 
   const logsWss = new WebSocketServer({ noServer: true });
@@ -75,6 +86,7 @@ async function handleHttp(
   res: ServerResponse,
   supervisor: ProcessSupervisor,
   tunnelHost: TunnelHostSession,
+  projectFolder: ProjectFolderSession,
 ): Promise<void> {
   if (req.method === "OPTIONS") {
     res.writeHead(204, {
@@ -157,6 +169,52 @@ async function handleHttp(
   if (req.method === "POST" && url === "/tunnel/host/close") {
     const closed = tunnelHost.close();
     sendJson(res, closed ? 202 : 409, tunnelHost.getState());
+    return;
+  }
+
+  if (req.method === "GET" && url === "/project/status") {
+    sendJson(res, 200, projectFolder.getState());
+    return;
+  }
+  if (req.method === "POST" && url === "/project/open") {
+    let body: unknown;
+    try {
+      body = JSON.parse(await readRequestBody(req));
+    } catch {
+      sendJson(res, 400, { error: "Body JSON non valido." });
+      return;
+    }
+    const rootPath = (body as { path?: unknown } | null)?.path;
+    if (typeof rootPath !== "string") {
+      sendJson(res, 400, { error: "Campo 'path' (stringa) mancante." });
+      return;
+    }
+    const result = projectFolder.openRoot(rootPath);
+    if (!result.ok) {
+      sendJson(res, 400, { error: result.error });
+      return;
+    }
+    sendJson(res, 200, projectFolder.getState());
+    return;
+  }
+  if (req.method === "POST" && url === "/project/close") {
+    const closed = projectFolder.closeRoot();
+    sendJson(res, closed ? 202 : 409, projectFolder.getState());
+    return;
+  }
+  if (req.method === "GET" && url.startsWith("/project/list")) {
+    // A differenza delle altre route GET (match esatto su `url`), questa
+    // porta un query param (`?path=`, relativo alla root corrente — "."
+    // per la root stessa): serve estrarlo dalla query string invece di un
+    // confronto diretto sull'intero `url`.
+    const parsed = new URL(url, "http://localhost");
+    const relativePath = parsed.searchParams.get("path") ?? ".";
+    const entries = await projectFolder.listDirectory(relativePath);
+    if (entries === null) {
+      sendJson(res, 404, { error: "Nessuna project root aperta, o percorso non valido/non leggibile." });
+      return;
+    }
+    sendJson(res, 200, { entries });
     return;
   }
 
