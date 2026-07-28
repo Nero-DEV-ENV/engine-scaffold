@@ -1,0 +1,138 @@
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { ProjectFolderSession, resolveWithinRoot, DEFAULT_IGNORED_NAMES } from "./projectFolder.js";
+
+/**
+ * projectFolder.test.ts — Fase 10A. Nessun mock del filesystem: fixture
+ * reali su una cartella temporanea (stesso stile già usato da
+ * processSupervisor.test.ts per gli stessi motivi — verificare
+ * empiricamente il comportamento reale invece di assumerlo).
+ */
+
+let fixtureRoot: string;
+
+beforeAll(() => {
+  fixtureRoot = mkdtempSync(path.join(tmpdir(), "host-agent-project-test-"));
+  writeFileSync(path.join(fixtureRoot, "scene.json"), "{}");
+  writeFileSync(path.join(fixtureRoot, "readme.md"), "# demo");
+  mkdirSync(path.join(fixtureRoot, "Assets"));
+  writeFileSync(path.join(fixtureRoot, "Assets", "model.glb"), "");
+  mkdirSync(path.join(fixtureRoot, "Assets", "Textures"));
+  writeFileSync(path.join(fixtureRoot, "Assets", "Textures", "wall.png"), "");
+  mkdirSync(path.join(fixtureRoot, "node_modules"));
+  writeFileSync(path.join(fixtureRoot, "node_modules", "dummy.js"), "");
+  mkdirSync(path.join(fixtureRoot, ".git"));
+});
+
+afterAll(() => {
+  rmSync(fixtureRoot, { recursive: true, force: true });
+});
+
+describe("resolveWithinRoot", () => {
+  it("risolve un sotto-percorso semplice dentro la root", () => {
+    expect(resolveWithinRoot("/tmp/progetto", "Assets")).toBe(path.resolve("/tmp/progetto", "Assets"));
+  });
+
+  it("risolve '.' come la root stessa", () => {
+    expect(resolveWithinRoot("/tmp/progetto", ".")).toBe(path.resolve("/tmp/progetto"));
+  });
+
+  it("blocca un tentativo di path traversal semplice", () => {
+    expect(resolveWithinRoot("/tmp/progetto", "../fuori")).toBeNull();
+  });
+
+  it("blocca un tentativo di path traversal annidato", () => {
+    expect(resolveWithinRoot("/tmp/progetto", "Assets/../../fuori")).toBeNull();
+  });
+
+  it("blocca un percorso assoluto estraneo passato come 'relativo'", () => {
+    expect(resolveWithinRoot("/tmp/progetto", "/etc/passwd")).toBeNull();
+  });
+
+  it("non blocca per errore una cartella sorella col prefisso giusto ma root diversa", () => {
+    // "/tmp/progetto-altro" NON deve risultare "dentro" "/tmp/progetto" solo
+    // perché la stringa inizia con lo stesso prefisso senza separatore.
+    expect(resolveWithinRoot("/tmp/progetto", "../progetto-altro")).toBeNull();
+  });
+});
+
+describe("ProjectFolderSession", () => {
+  it("rifiuta l'apertura di un percorso relativo", () => {
+    const session = new ProjectFolderSession();
+    const result = session.openRoot("relativo/qualche/cartella");
+    expect(result.ok).toBe(false);
+    expect(session.getState().rootPath).toBeNull();
+  });
+
+  it("rifiuta l'apertura di un percorso inesistente", () => {
+    const session = new ProjectFolderSession();
+    const result = session.openRoot(path.join(fixtureRoot, "non-esiste"));
+    expect(result.ok).toBe(false);
+  });
+
+  it("rifiuta l'apertura di un percorso che è un file, non una cartella", () => {
+    const session = new ProjectFolderSession();
+    const result = session.openRoot(path.join(fixtureRoot, "readme.md"));
+    expect(result.ok).toBe(false);
+  });
+
+  it("apre correttamente una cartella reale e la riflette in getState()", () => {
+    const session = new ProjectFolderSession();
+    const result = session.openRoot(fixtureRoot);
+    expect(result.ok).toBe(true);
+    expect(session.getState().rootPath).toBe(path.resolve(fixtureRoot));
+  });
+
+  it("closeRoot() torna false se nessuna root era aperta, true se la chiude davvero", () => {
+    const session = new ProjectFolderSession();
+    expect(session.closeRoot()).toBe(false);
+    session.openRoot(fixtureRoot);
+    expect(session.closeRoot()).toBe(true);
+    expect(session.getState().rootPath).toBeNull();
+  });
+
+  it("listDirectory() restituisce null se nessuna root è aperta", async () => {
+    const session = new ProjectFolderSession();
+    await expect(session.listDirectory(".")).resolves.toBeNull();
+  });
+
+  it("listDirectory('.') elenca la root escludendo node_modules/.git, cartelle prima dei file", async () => {
+    const session = new ProjectFolderSession();
+    session.openRoot(fixtureRoot);
+    const entries = await session.listDirectory(".");
+    expect(entries).toEqual([
+      { name: "Assets", kind: "directory" },
+      { name: "readme.md", kind: "file" },
+      { name: "scene.json", kind: "file" },
+    ]);
+  });
+
+  it("listDirectory() naviga in una sottocartella reale", async () => {
+    const session = new ProjectFolderSession();
+    session.openRoot(fixtureRoot);
+    const entries = await session.listDirectory("Assets");
+    expect(entries).toEqual([
+      { name: "Textures", kind: "directory" },
+      { name: "model.glb", kind: "file" },
+    ]);
+  });
+
+  it("listDirectory() restituisce null per un tentativo di path traversal", async () => {
+    const session = new ProjectFolderSession();
+    session.openRoot(fixtureRoot);
+    await expect(session.listDirectory("../../fuori")).resolves.toBeNull();
+  });
+
+  it("listDirectory() restituisce null per una sottocartella inesistente", async () => {
+    const session = new ProjectFolderSession();
+    session.openRoot(fixtureRoot);
+    await expect(session.listDirectory("NonEsiste")).resolves.toBeNull();
+  });
+
+  it("DEFAULT_IGNORED_NAMES contiene le cartelle standard da escludere", () => {
+    expect(DEFAULT_IGNORED_NAMES.has("node_modules")).toBe(true);
+    expect(DEFAULT_IGNORED_NAMES.has(".git")).toBe(true);
+  });
+});
