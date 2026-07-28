@@ -10,32 +10,42 @@ function fakeGameObject(name: string): GameObject {
 
 describe("buildSceneContextMenuItems", () => {
   describe("con un target (click destro su un oggetto)", () => {
-    it("restituisce una sola voce 'Elimina'", () => {
+    it("restituisce esattamente le voci 'Duplica' ed 'Elimina', in quest'ordine", () => {
       const target = fakeGameObject("Cube");
-      const handle = { removeGameObject: vi.fn() } as unknown as EditorSceneHandle;
+      const handle = { duplicateGameObject: vi.fn(), removeGameObject: vi.fn() } as unknown as EditorSceneHandle;
 
       const items = buildSceneContextMenuItems(target, handle);
 
-      expect(items).toHaveLength(1);
-      expect(items[0]?.label).toBe("Elimina");
+      expect(items.map((item) => item.label)).toEqual(["Duplica", "Elimina"]);
+    });
+
+    it("'Duplica' chiama EditorSceneHandle.duplicateGameObject con il target", () => {
+      const target = fakeGameObject("Cube");
+      const duplicateGameObject = vi.fn();
+      const handle = { duplicateGameObject, removeGameObject: vi.fn() } as unknown as EditorSceneHandle;
+
+      const items = buildSceneContextMenuItems(target, handle);
+      items[0]?.onSelect();
+
+      expect(duplicateGameObject).toHaveBeenCalledWith(target);
     });
 
     it("'Elimina' chiama EditorSceneHandle.removeGameObject con il target", () => {
       const target = fakeGameObject("Cube");
       const removeGameObject = vi.fn();
-      const handle = { removeGameObject } as unknown as EditorSceneHandle;
+      const handle = { duplicateGameObject: vi.fn(), removeGameObject } as unknown as EditorSceneHandle;
 
       const items = buildSceneContextMenuItems(target, handle);
-      items[0]?.onSelect();
+      items[1]?.onSelect();
 
       expect(removeGameObject).toHaveBeenCalledWith(target);
     });
 
-    it("'Elimina' non lancia se l'handle è null (stesso trattamento del bottone Inspector)", () => {
+    it("né 'Duplica' né 'Elimina' lanciano se l'handle è null (stesso trattamento del bottone Inspector)", () => {
       const target = fakeGameObject("Cube");
       const items = buildSceneContextMenuItems(target, null);
 
-      expect(() => items[0]?.onSelect()).not.toThrow();
+      expect(() => items.forEach((item) => item.onSelect())).not.toThrow();
     });
   });
 

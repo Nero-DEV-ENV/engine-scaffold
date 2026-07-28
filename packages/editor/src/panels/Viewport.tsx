@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { createEditorScene, type EditorSceneHandle } from "../scene/createEditorScene.js";
+import { createEditorScene, CLICK_MOVE_THRESHOLD_PX, type EditorSceneHandle } from "../scene/createEditorScene.js";
 import { sceneRootsStore, selectionStore, editorSceneHandleStore } from "../store/editorStore.js";
 import { buildSceneContextMenuItems } from "../scene/contextMenuItems.js";
 import { ContextMenu } from "./ContextMenu.js";
@@ -53,6 +53,19 @@ import { ContextMenu } from "./ContextMenu.js";
  * bootstrap async sopra: il container esiste subito al mount, non serve
  * attendere che `createEditorScene` risolva per poter intercettare
  * `contextmenu`.
+ *
+ * Fase 8B-fix (bug scoperto in smoke-test): il browser genera l'evento
+ * nativo `contextmenu` al rilascio del tasto destro SEMPRE, anche dopo un
+ * drag (pan/orbita con OrbitControls, tasto destro invariato da Fase 4C) —
+ * senza guardia, un drag col tasto destro per muovere la camera apriva
+ * ANCHE il menu Duplica/Elimina al rilascio. Stessa identica soglia di
+ * movimento già usata in createEditorScene.ts per distinguere un click di
+ * selezione da un drag col tasto sinistro (`CLICK_MOVE_THRESHOLD_PX`,
+ * esportata da lì per questo riuso): `onRightPointerDown` registra la
+ * posizione di partenza sul tasto destro, `onContextMenu` la confronta con
+ * la propria — `preventDefault()` scatta comunque sempre (sopprime il menu
+ * nativo del browser in ogni caso), ma il menu NOSTRO si apre solo se lo
+ * spostamento è rimasto sotto soglia.
  */
 export function Viewport(): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -63,13 +76,35 @@ export function Viewport(): JSX.Element {
     const container = containerRef.current;
     if (!container) return;
 
+    let rightPointerDownPosition: { x: number; y: number } | null = null;
+
+    function onRightPointerDown(event: PointerEvent): void {
+      if (event.button === 2) {
+        rightPointerDownPosition = { x: event.clientX, y: event.clientY };
+      }
+    }
+
     function onContextMenu(event: MouseEvent): void {
       event.preventDefault();
+      const startPosition = rightPointerDownPosition;
+      rightPointerDownPosition = null;
+      if (startPosition) {
+        const dx = event.clientX - startPosition.x;
+        const dy = event.clientY - startPosition.y;
+        // Spostamento oltre soglia: era un drag (pan/orbita), non un vero
+        // click destro — stessa identica logica del click sinistro di
+        // selezione in createEditorScene.ts.
+        if (Math.hypot(dx, dy) > CLICK_MOVE_THRESHOLD_PX) return;
+      }
       setContextMenu({ x: event.clientX, y: event.clientY });
     }
 
+    container.addEventListener("pointerdown", onRightPointerDown);
     container.addEventListener("contextmenu", onContextMenu);
-    return () => container.removeEventListener("contextmenu", onContextMenu);
+    return () => {
+      container.removeEventListener("pointerdown", onRightPointerDown);
+      container.removeEventListener("contextmenu", onContextMenu);
+    };
   }, []);
 
   useEffect(() => {
