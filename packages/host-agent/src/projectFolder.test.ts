@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ProjectFolderSession, resolveWithinRoot, DEFAULT_IGNORED_NAMES } from "./projectFolder.js";
@@ -174,5 +174,99 @@ describe("ProjectFolderSession", () => {
       session.openRoot(fixtureRoot);
       await expect(session.readFile("Assets")).resolves.toBeNull();
     });
+  });
+});
+
+describe("ProjectFolderSession — persistenza dello stato (Fase 10D)", () => {
+  // Cartella dedicata SOLO al file di stato, separata da fixtureRoot (che
+  // simula la project folder dell'utente): nessun mock, stessa filosofia
+  // del resto del file — fixture reali su cartelle temporanee.
+  let stateDir: string;
+
+  beforeAll(() => {
+    stateDir = mkdtempSync(path.join(tmpdir(), "host-agent-project-state-"));
+  });
+
+  afterAll(() => {
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("senza statePath configurato, si comporta come prima di Fase 10D (solo in memoria, nessun file scritto)", () => {
+    const session = new ProjectFolderSession();
+    const result = session.openRoot(fixtureRoot);
+    expect(result.ok).toBe(true);
+    expect(session.getState().rootPath).toBe(path.resolve(fixtureRoot));
+  });
+
+  it("openRoot() scrive rootPath su statePath, creando le cartelle intermedie mancanti", () => {
+    const statePath = path.join(stateDir, "openroot", "nested", "state.json");
+    const session = new ProjectFolderSession({ statePath });
+    session.openRoot(fixtureRoot);
+    const written = JSON.parse(readFileSync(statePath, "utf8"));
+    expect(written).toEqual({ rootPath: path.resolve(fixtureRoot) });
+  });
+
+  it("closeRoot() aggiorna statePath a rootPath: null", () => {
+    const statePath = path.join(stateDir, "closeroot", "state.json");
+    const session = new ProjectFolderSession({ statePath });
+    session.openRoot(fixtureRoot);
+    session.closeRoot();
+    const written = JSON.parse(readFileSync(statePath, "utf8"));
+    expect(written).toEqual({ rootPath: null });
+  });
+
+  it("restore() riapre silenziosamente l'ultima root nota, se ancora valida", () => {
+    const statePath = path.join(stateDir, "restore-ok", "state.json");
+    const first = new ProjectFolderSession({ statePath });
+    first.openRoot(fixtureRoot);
+
+    const second = new ProjectFolderSession({ statePath });
+    expect(second.getState().rootPath).toBeNull();
+    second.restore();
+    expect(second.getState().rootPath).toBe(path.resolve(fixtureRoot));
+  });
+
+  it("restore() è un no-op silenzioso se statePath non è configurato", () => {
+    const session = new ProjectFolderSession();
+    expect(() => session.restore()).not.toThrow();
+    expect(session.getState().rootPath).toBeNull();
+  });
+
+  it("restore() fallisce silenziosamente se il file di stato non esiste ancora (primo avvio)", () => {
+    const statePath = path.join(stateDir, "mai-scritto", "state.json");
+    const session = new ProjectFolderSession({ statePath });
+    expect(() => session.restore()).not.toThrow();
+    expect(session.getState().rootPath).toBeNull();
+  });
+
+  it("restore() fallisce silenziosamente se il file di stato contiene JSON non valido", () => {
+    const dir = path.join(stateDir, "json-non-valido");
+    mkdirSync(dir, { recursive: true });
+    const statePath = path.join(dir, "state.json");
+    writeFileSync(statePath, "{ non è json valido");
+    const session = new ProjectFolderSession({ statePath });
+    session.restore();
+    expect(session.getState().rootPath).toBeNull();
+  });
+
+  it("restore() fallisce silenziosamente se il file di stato non ha la shape attesa", () => {
+    const dir = path.join(stateDir, "shape-inattesa");
+    mkdirSync(dir, { recursive: true });
+    const statePath = path.join(dir, "state.json");
+    writeFileSync(statePath, JSON.stringify({ qualcosaAltro: 42 }));
+    const session = new ProjectFolderSession({ statePath });
+    session.restore();
+    expect(session.getState().rootPath).toBeNull();
+  });
+
+  it("restore() fallisce silenziosamente se la root salvata non esiste più su disco", () => {
+    const dir = path.join(stateDir, "root-rimossa");
+    mkdirSync(dir, { recursive: true });
+    const statePath = path.join(dir, "state.json");
+    const rootOraRimossa = path.join(fixtureRoot, "una-cartella-che-non-esiste");
+    writeFileSync(statePath, JSON.stringify({ rootPath: rootOraRimossa }));
+    const session = new ProjectFolderSession({ statePath });
+    session.restore();
+    expect(session.getState().rootPath).toBeNull();
   });
 });
