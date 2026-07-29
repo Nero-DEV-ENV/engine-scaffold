@@ -3,7 +3,8 @@ import type { ChangeEvent } from "react";
 import { assetsStore, editorSceneHandleStore } from "../store/editorStore.js";
 import { importAssetFile, removeAsset, refreshAssets } from "../assets/assetsController.js";
 import type { AssetMeta } from "../persistence/AssetPersistence.js";
-import { PlusIcon, RemoveIcon } from "../icons.js";
+import { PlusIcon, RemoveIcon, ModelIcon } from "../icons.js";
+import { ProjectTree } from "./ProjectTree.js";
 
 /**
  * AssetsPanel — pannello "Project window"-style (Fase 7, punto aperto 4:
@@ -24,11 +25,13 @@ import { PlusIcon, RemoveIcon } from "../icons.js";
  * fianco a fianco con Hierarchy nella riga inferiore (il Viewport occupa
  * l'intera riga superiore, Inspector resta l'unica colonna a piena
  * altezza), come il Project panel nello screenshot Unity di riferimento
- * fornito dall'utente. Il markup è stato diviso in due colonne interne:
- * `.project-panel-tree` è un PLACEHOLDER visivo (nessun vero file-tree: il
- * caricamento di cartelle reali non esiste ancora, resta da costruire in
- * una fase futura) accanto a `.project-panel-content`, che contiene la
- * stessa lista/logica di prima (import/lista/rimuovi, invariata).
+ * fornito dall'utente. Il markup è diviso in due colonne interne:
+ * `ProjectTree` (Fase 10B — albero navigabile reale sulla project folder
+ * via host-agent `/project/*`, vedi `panels/ProjectTree.tsx`; sostituisce
+ * il placeholder statico `.project-panel-tree` di Fase 9) accanto a
+ * `.project-panel-content`, che contiene la stessa lista/logica di prima
+ * (import/lista/rimuovi, invariata — resta un percorso parallelo, non
+ * collegato all'albero: l'integrazione arriva in Fase 10C).
  *
  * Fase 9 — su richiesta dell'utente il bottone testuale "Aggiungi alla
  * scena" per i modelli è sostituito da un'icona SVG puramente decorativa
@@ -42,35 +45,6 @@ import { PlusIcon, RemoveIcon } from "../icons.js";
  * focusabile come lo era il bottone-icona di una versione precedente —
  * limite noto, non risolto in questa fase.
  */
-/**
- * Fase 9 — icona SVG minimale (cubo isometrico stilizzato) per i modelli
- * nella lista Assets, al posto del precedente bottone testuale "Aggiungi
- * alla scena". `currentColor`: eredita il colore testo del contenitore
- * (nessun colore proprio, coerente con la palette in scala di grigi).
- */
-function ModelIcon(): JSX.Element {
-  return (
-    <svg
-      className="assets-row-icon"
-      viewBox="0 0 16 16"
-      width="16"
-      height="16"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <path
-        d="M8 1.2 14 4.6V11.4L8 14.8 2 11.4V4.6Z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinejoin="round"
-      />
-      <path d="M2 4.6 8 8 14 4.6" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-      <path d="M8 8 8 14.8" fill="none" stroke="currentColor" strokeWidth="1.2" />
-    </svg>
-  );
-}
-
 export function AssetsPanel(): JSX.Element {
   const assets = assetsStore.useValue();
   const handle = editorSceneHandleStore.useValue();
@@ -136,11 +110,10 @@ export function AssetsPanel(): JSX.Element {
       </div>
       {importError && <p className="assets-error">{importError}</p>}
       <div className="project-panel">
-        {/* Fase 9 — placeholder visivo per il futuro folder-tree (vedi
-            JSDoc sopra): nessuna cartella reale, solo lo spazio/stile. */}
-        <div className="project-panel-tree" aria-hidden="true">
-          <p className="project-panel-tree-placeholder">Cartelle in arrivo</p>
-        </div>
+        {/* Fase 10B — sostituisce il placeholder statico di Fase 9: vedi
+            ProjectTree.tsx per l'albero navigabile reale (host-agent
+            /project/*). */}
+        <ProjectTree />
         <div className="project-panel-content">
           {assets.length === 0 ? (
             <p className="panel-placeholder">Nessun asset importato.</p>
@@ -148,7 +121,11 @@ export function AssetsPanel(): JSX.Element {
             <ul className="assets-list">
               {assets.map((asset) => (
                 <li key={asset.id} className="assets-row">
-                  {asset.kind === "model-gltf" && <ModelIcon />}
+                  {asset.kind === "model-gltf" && (
+                    <span className="assets-row-icon">
+                      <ModelIcon />
+                    </span>
+                  )}
                   <span
                     className={
                       asset.kind === "model-gltf"
