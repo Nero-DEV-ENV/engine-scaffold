@@ -49,6 +49,59 @@ export function SaveIcon(): JSX.Element {
   );
 }
 
+/**
+ * Fase 10B — spostata qui da `panels/AssetsPanel.tsx` (dove nasceva in
+ * Fase 9): il nuovo `panels/ProjectTree.tsx` deve mostrare la stessa icona
+ * per i modelli glTF/GLB riconosciuti nell'albero, coerenza col
+ * linguaggio visivo già in uso nella lista Assets.
+ */
+export function ModelIcon(): JSX.Element {
+  return (
+    <svg {...commonProps}>
+      <path
+        d="M8 1.2 14 4.6V11.4L8 14.8 2 11.4V4.6Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <path d="M2 4.6 8 8 14 4.6" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+      <path d="M8 8 8 14.8" fill="none" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  );
+}
+
+/** Fase 10B — cartella nell'albero navigabile del Project panel (`panels/ProjectTree.tsx`). */
+export function FolderIcon(): JSX.Element {
+  return (
+    <svg {...commonProps}>
+      <path
+        d="M1.5 4.2C1.5 3.6 2 3.1 2.6 3.1H6L7.3 4.4H13.4C14 4.4 14.5 4.9 14.5 5.5V11.4C14.5 12 14 12.5 13.4 12.5H2.6C2 12.5 1.5 12 1.5 11.4Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** Fase 10B — file generico (nessun tipo riconosciuto) nell'albero navigabile del Project panel. */
+export function FileIcon(): JSX.Element {
+  return (
+    <svg {...commonProps}>
+      <path
+        d="M3.5 1.5H9.5L12.5 4.5V14.5H3.5Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <path d="M9.5 1.5V4.5H12.5" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export function LoadIcon(): JSX.Element {
   return (
     <svg {...commonProps}>

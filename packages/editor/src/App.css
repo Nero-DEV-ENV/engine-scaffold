@@ -1016,11 +1016,13 @@ body {
   text-align: center;
 }
 
-/* Fase 9 — split orizzontale che ricalca il Project panel di Unity:
-   .project-panel-tree è un PLACEHOLDER visivo (nessun vero file-tree,
-   non esiste ancora caricamento cartelle — vedi AssetsPanel.tsx), accanto
-   alla lista asset reale e funzionante (.project-panel-content, stessa
-   logica di import/lista/rimuovi di prima). */
+/* Fase 9 → Fase 10B — split orizzontale che ricalca il Project panel di
+   Unity: .project-panel-tree ospitava un PLACEHOLDER statico in Fase 9,
+   ora è il contenitore del vero albero navigabile (ProjectTree.tsx),
+   accanto alla lista asset reale e funzionante (.project-panel-content,
+   stessa logica di import/lista/rimuovi di prima). Larghezza aumentata
+   da 120 a 160px per fare spazio al campo percorso + bottone Apri/Chiudi
+   senza wrapping. */
 .project-panel {
   flex: 1 1 auto;
   display: flex;
@@ -1030,12 +1032,15 @@ body {
 }
 
 .project-panel-tree {
-  flex: 0 0 120px;
+  flex: 0 0 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   padding-right: 10px;
   margin-right: 10px;
   border-right: 1px solid var(--border);
-  overflow: hidden;
-  text-align: center;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .project-panel-tree-placeholder {
@@ -1043,6 +1048,161 @@ body {
   font-size: 11px;
   color: var(--text-placeholder);
   text-align: center;
+}
+
+/* Fase 10B — riga campo percorso + bottone Apri/Chiudi, in cima al
+   pannello Project. Il campo testo usa --radius-input (spigoloso, non
+   --radius-sm): precisazione utente di Fase 9, "le text box restano
+   spigolose" — vale per ogni input di testo editabile, non solo quelli
+   già esistenti. */
+.project-tree-open-row {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 4px;
+}
+
+.project-tree-path-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--bg-field);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 6px;
+}
+
+.project-tree-path-input::placeholder {
+  color: var(--text-placeholder);
+}
+
+.project-tree-path-input:disabled {
+  color: var(--text-disabled);
+  border-color: var(--border-disabled);
+}
+
+.project-tree-open-button {
+  flex: 0 0 auto;
+  border: none;
+  background: var(--bg-field);
+  color: var(--text-bright);
+  font: inherit;
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  /* Stesso "in rilievo" di .host-status-button (status bar dell'agente):
+     coerenza visiva fra i due punti dell'editor che parlano con
+     host-agent. */
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+.project-tree-open-button:hover:not(:disabled) {
+  background: var(--bg-surface);
+}
+
+.project-tree-open-button:disabled {
+  color: var(--text-disabled);
+  box-shadow: none;
+  cursor: default;
+}
+
+/* Fase 10B — riusa .host-status-dot/.host-status-dot-unreachable (già
+   definite sopra per HostAgentPanel.tsx): stesso linguaggio visivo per
+   "agente non raggiungibile", non un secondo pattern d'errore parallelo
+   (punto 1 confermato dall'utente). */
+.project-tree-agent-status {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-placeholder);
+}
+
+.project-tree-status {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-placeholder);
+  text-align: left;
+}
+
+.project-tree-status-error {
+  color: var(--status-error);
+}
+
+.project-tree-root-path {
+  flex: 0 0 auto;
+  margin: 0;
+  font-size: 10px;
+  color: var(--text-label);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-tree-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.project-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.project-tree-row:hover {
+  color: var(--text-bright);
+}
+
+.project-tree-row-selected {
+  background: var(--bg-accent-muted);
+  color: var(--text-bright);
+}
+
+/* Triangolo CSS puro (nessuna nuova icona SVG con prop: le icone
+   condivise in icons.tsx restano senza parametri, stessa convenzione di
+   PlusIcon/RemoveIcon) — ruota di 90° da chiuso ad espanso. */
+.project-tree-chevron,
+.project-tree-chevron-spacer {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+}
+
+.project-tree-chevron {
+  border-style: solid;
+  border-width: 3px 0 3px 5px;
+  border-color: transparent transparent transparent var(--text-muted);
+  transition: transform 0.1s ease;
+}
+
+.project-tree-chevron-expanded {
+  transform: rotate(90deg);
+}
+
+.project-tree-icon {
+  flex: 0 0 auto;
+  display: flex;
+  color: var(--text-secondary);
+}
+
+.project-tree-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .project-panel-content {
