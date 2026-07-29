@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
+import path from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import type { ProcessSupervisor, AgentState, LogEntry } from "./processSupervisor.js";
 import type { TunnelHostSession, TunnelHostState } from "./tunnelHostSession.js";
@@ -71,6 +72,26 @@ export function createHostAgentServer(
   });
 
   return server;
+}
+
+/**
+ * Fase 10C — mapping estensione→MIME per `GET /project/file`: stessi
+ * formati riconosciuti da `assets/assetsController.ts` lato editor
+ * (Fase 7), qui serve solo a valorizzare l'header `Content-Type` della
+ * risposta binaria — la classificazione del formato lato editor resta
+ * comunque basata sul nome file (vedi `detectAssetKind`), questo header è
+ * un aiuto per il browser/fetch, non l'unica fonte di verità.
+ */
+const MIME_TYPES: Readonly<Record<string, string>> = {
+  ".glb": "model/gltf-binary",
+  ".gltf": "model/gltf+json",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+};
+
+function mimeTypeForPath(filePath: string): string {
+  return MIME_TYPES[path.extname(filePath).toLowerCase()] ?? "application/octet-stream";
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -215,6 +236,31 @@ async function handleHttp(
       return;
     }
     sendJson(res, 200, { entries });
+    return;
+  }
+  if (req.method === "GET" && url.startsWith("/project/file")) {
+    // Fase 10C — byte grezzi di un file dentro la project root corrente,
+    // per l'import diretto dall'albero/griglia (l'editor non ha più
+    // bisogno di passare da `<input type="file">` per questi). Risposta
+    // binaria diretta (non `sendJson`): niente base64/JSON per un payload
+    // che può essere anche diverse decine di MB (modelli GLB).
+    const parsed = new URL(url, "http://localhost");
+    const relativePath = parsed.searchParams.get("path");
+    if (relativePath === null || relativePath.length === 0) {
+      sendJson(res, 400, { error: "Parametro 'path' mancante." });
+      return;
+    }
+    const data = await projectFolder.readFile(relativePath);
+    if (data === null) {
+      sendJson(res, 404, { error: "File non trovato, non leggibile, o percorso non valido." });
+      return;
+    }
+    res.writeHead(200, {
+      "Content-Type": mimeTypeForPath(relativePath),
+      "Content-Length": data.length,
+      "Access-Control-Allow-Origin": "*",
+    });
+    res.end(data);
     return;
   }
 

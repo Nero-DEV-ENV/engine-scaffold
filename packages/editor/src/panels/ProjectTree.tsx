@@ -1,14 +1,17 @@
 import { useEffect, useReducer, useState } from "react";
 import type { CSSProperties } from "react";
-import { FolderIcon, FileIcon, ModelIcon } from "../icons.js";
+import { FolderIcon, FileIcon, ModelIcon, TextureIcon } from "../icons.js";
 import {
   projectRootStore,
+  viewedFolderStore,
   refreshProjectStatus,
   openProjectRoot,
   closeProjectRoot,
   listProjectDirectory,
 } from "../network/projectFolderClient.js";
 import { agentConnectionStore, ensureAgentMonitoring } from "../network/hostAgentClient.js";
+import { editorSceneHandleStore } from "../store/editorStore.js";
+import { importProjectFile } from "../assets/assetsController.js";
 import {
   PROJECT_TREE_ROOT_PATH,
   INITIAL_PROJECT_TREE_STATE,
@@ -40,6 +43,18 @@ const INDENT_PX_PER_DEPTH = 14;
  * Nessuna scansione ricorsiva eager: ogni cartella viene interrogata via
  * `listProjectDirectory` solo quando l'utente la espande esplicitamente
  * (vedi obiettivo dichiarato di questa fase).
+ *
+ * Fase 10C — doppio click collegato (click singolo resta invariato,
+ * espandi/collassa per le cartelle):
+ * - su un file classificato "model" → importa (`importProjectFile`,
+ *   scarica i byte via host-agent) E aggiunge subito alla scena corrente,
+ *   stesso `EditorSceneHandle.addImportedModel` già usato dalla lista
+ *   Assets classica in `AssetsPanel.tsx`. Texture/altro: nessuna azione
+ *   (punto aperto 4 confermato, fuori scope).
+ * - su una cartella → apre il suo contenuto nell'Asset manager
+ *   (`viewedFolderStore`, letto da `ProjectFolderGrid.tsx` in
+ *   `AssetsPanel.tsx`), che sostituisce temporaneamente la lista Assets
+ *   classica finché l'utente non torna alla radice via breadcrumb.
  */
 export function ProjectTree(): JSX.Element {
   const rootPath = projectRootStore.useValue();
@@ -48,6 +63,7 @@ export function ProjectTree(): JSX.Element {
 
   const [pathInput, setPathInput] = useState("");
   const [openError, setOpenError] = useState<string | null>(null);
+  const [importingPath, setImportingPath] = useState<string | null>(null);
   const [tree, dispatch] = useReducer(projectTreeReducer, INITIAL_PROJECT_TREE_STATE);
 
   useEffect(() => {
@@ -99,6 +115,26 @@ export function ProjectTree(): JSX.Element {
     }
   }
 
+  /** Fase 10C, punto 1: doppio click su un modello → importa e aggiunge subito alla scena, un solo gesto. */
+  async function onImportModel(entryPath: string, name: string): Promise<void> {
+    if (importingPath) return;
+    setImportingPath(entryPath);
+    try {
+      const meta = await importProjectFile(entryPath, name);
+      const handle = editorSceneHandleStore.get();
+      if (meta && handle) {
+        await handle.addImportedModel(meta.id, meta.name);
+      }
+    } finally {
+      setImportingPath(null);
+    }
+  }
+
+  /** Fase 10C, punto 5: doppio click su una cartella → la apre nell'Asset manager (ProjectFolderGrid.tsx). */
+  function onOpenFolderInAssetManager(entryPath: string): void {
+    viewedFolderStore.set(entryPath);
+  }
+
   function indentStyle(depth: number): CSSProperties {
     return { paddingLeft: depth * INDENT_PX_PER_DEPTH };
   }
@@ -127,16 +163,33 @@ export function ProjectTree(): JSX.Element {
           const classification = classifyProjectEntry(entry);
           const expanded = tree.expandedPaths.has(entryPath);
           const isDirectory = entry.kind === "directory";
+          const isImporting = importingPath === entryPath;
 
           return (
             <li key={entryPath}>
               <div
-                className={`project-tree-row${tree.selectedPath === entryPath ? " project-tree-row-selected" : ""}`}
+                className={`project-tree-row${tree.selectedPath === entryPath ? " project-tree-row-selected" : ""}${isImporting ? " project-tree-row-importing" : ""}`}
                 style={indentStyle(depth)}
                 onClick={() => {
                   dispatch({ type: "select", path: entryPath });
                   if (isDirectory) onToggleDirectory(entryPath);
                 }}
+                onDoubleClick={() => {
+                  if (isDirectory) {
+                    onOpenFolderInAssetManager(entryPath);
+                  } else if (classification === "model") {
+                    void onImportModel(entryPath, entry.name);
+                  }
+                }}
+                title={
+                  isDirectory
+                    ? "Doppio click per aprire nell'Asset manager"
+                    : classification === "model"
+                      ? isImporting
+                        ? "Importazione in corso…"
+                        : "Doppio click per aggiungere alla scena"
+                      : entry.name
+                }
               >
                 {isDirectory ? (
                   <span
@@ -149,7 +202,8 @@ export function ProjectTree(): JSX.Element {
                 <span className="project-tree-icon">
                   {classification === "folder" && <FolderIcon />}
                   {classification === "model" && <ModelIcon />}
-                  {(classification === "texture" || classification === "other") && <FileIcon />}
+                  {classification === "texture" && <TextureIcon />}
+                  {classification === "other" && <FileIcon />}
                 </span>
                 <span className="project-tree-name" title={entry.name}>
                   {entry.name}

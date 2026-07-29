@@ -37,6 +37,18 @@ function httpBaseUrl(): string {
 export const projectRootStore = createExternalStore<string | null>(null);
 
 /**
+ * Fase 10C — percorso relativo della cartella attualmente aperta
+ * nell'Asset manager (doppio click su una cartella in `ProjectTree.tsx`),
+ * o `null` se nessuna: in quel caso `AssetsPanel.tsx` mostra la lista
+ * Assets classica (Fase 7, invariata) invece della griglia
+ * (`ProjectFolderGrid.tsx`) — un solo pannello, una sola vista alla volta
+ * (raccomandazione confermata dall'utente). Azzerato esplicitamente
+ * all'apertura di una nuova root e alla chiusura, per non restare
+ * "agganciato" a un percorso di una project folder ormai diversa/chiusa.
+ */
+export const viewedFolderStore = createExternalStore<string | null>(null);
+
+/**
  * Interroga `GET /project/status` e allinea `projectRootStore` allo stato
  * reale dell'agente — l'agente può avere già una root aperta da prima di
  * questo mount (nessuna persistenza lato editor in questa fase, vedi punto
@@ -77,6 +89,7 @@ export async function openProjectRoot(absolutePath: string): Promise<OpenProject
       return { ok: false, error: body.error ?? "Errore sconosciuto." };
     }
     projectRootStore.set(body.rootPath ?? absolutePath);
+    viewedFolderStore.set(null);
     return { ok: true };
   } catch {
     return { ok: false, error: "Agente non raggiungibile." };
@@ -93,6 +106,7 @@ export async function closeProjectRoot(): Promise<void> {
     const response = await fetch(`${httpBaseUrl()}/project/close`, { method: "POST" });
     if (response.ok || response.status === 409) {
       projectRootStore.set(null);
+      viewedFolderStore.set(null);
     }
   } catch {
     // Agente non raggiungibile: nessuna azione, stato invariato.
@@ -115,6 +129,36 @@ export async function listProjectDirectory(relativePath: string): Promise<Projec
     if (!response.ok) return null;
     const body = (await response.json()) as { entries: ProjectEntry[] };
     return body.entries;
+  } catch {
+    return null;
+  }
+}
+
+export interface ProjectFileResult {
+  data: ArrayBuffer;
+  mimeType: string;
+}
+
+/**
+ * Fase 10C — scarica i byte grezzi di `relativePath` via `GET
+ * /project/file` (nuova route lato host-agent, vedi
+ * `packages/host-agent/src/httpServer.ts`): usata per importare un
+ * modello scelto nell'albero (`ProjectTree.tsx`) o nella griglia cartella
+ * (`ProjectFolderGrid.tsx`) senza passare da `<input type="file">` (Fase
+ * 7). `null` se l'agente non è raggiungibile, se non c'è una root aperta,
+ * o se il percorso non è valido/leggibile come file — stesso trattamento
+ * "silenzioso" di `listProjectDirectory` sopra, il chiamante decide come
+ * mostrarlo (es. `assets/assetsController.ts` restituisce a sua volta
+ * `null`, coerente col contratto già esistente di `importAssetFile`).
+ */
+export async function fetchProjectFile(relativePath: string): Promise<ProjectFileResult | null> {
+  try {
+    const url = `${httpBaseUrl()}/project/file?path=${encodeURIComponent(relativePath)}`;
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const data = await response.arrayBuffer();
+    const mimeType = response.headers.get("Content-Type") ?? "application/octet-stream";
+    return { data, mimeType };
   } catch {
     return null;
   }

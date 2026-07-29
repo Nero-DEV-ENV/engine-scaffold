@@ -102,6 +102,48 @@ export function FileIcon(): JSX.Element {
   );
 }
 
+/**
+ * Fase 10C — freccia "torna indietro" per la navigazione a breadcrumb
+ * della griglia cartella (`panels/ProjectFolderGrid.tsx`): un livello alla
+ * volta, stesso comportamento di risalita di un file browser nativo.
+ */
+export function BackIcon(): JSX.Element {
+  return (
+    <svg {...commonProps}>
+      <path
+        d="M9.5 3 4.5 8 9.5 13"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/**
+ * Fase 10C — texture (PNG/JPG) nella griglia cartella (`ProjectFolderGrid.tsx`):
+ * distingue visivamente le immagini dai file generici, indistinguibili fino
+ * ad ora nell'albero (dove sia "texture" che "other" usavano `FileIcon`).
+ */
+export function TextureIcon(): JSX.Element {
+  return (
+    <svg {...commonProps}>
+      <path d="M2 3H14V13H2Z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+      <circle cx="5.6" cy="6.2" r="1.1" fill="none" stroke="currentColor" strokeWidth="1.1" />
+      <path
+        d="M2 11 6 7.5 8.5 9.8 11 7 14 10.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 export function LoadIcon(): JSX.Element {
   return (
     <svg {...commonProps}>

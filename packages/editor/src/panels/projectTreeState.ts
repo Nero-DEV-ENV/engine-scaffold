@@ -56,6 +56,29 @@ export function joinProjectPath(parentPath: string, childName: string): string {
   return parentPath === PROJECT_TREE_ROOT_PATH ? childName : `${parentPath}/${childName}`;
 }
 
+/**
+ * Fase 10C — scompone un percorso relativo (MAI la root ".", solo un
+ * sottopercorso reale come "Assets/Textures") nei suoi segmenti, per la
+ * breadcrumb di `ProjectFolderGrid.tsx`.
+ */
+export function breadcrumbSegments(relativePath: string): string[] {
+  return relativePath.split("/");
+}
+
+/**
+ * Percorso del genitore di `relativePath` dentro la project folder, per la
+ * risalita di un livello nella griglia cartella (Fase 10C). `null` se
+ * `relativePath` è già un elemento di primo livello (es. "Assets"):
+ * risalire ulteriormente esce dalla griglia, tornando alla lista Assets
+ * classica — stessa semantica di `viewedFolderStore` in
+ * `network/projectFolderClient.ts` (`null` = nessuna cartella in vista).
+ */
+export function parentProjectPath(relativePath: string): string | null {
+  const segments = relativePath.split("/");
+  segments.pop();
+  return segments.length === 0 ? null : segments.join("/");
+}
+
 export type ProjectNodeLoadState = "idle" | "loading" | "loaded" | "error";
 
 export interface ProjectTreeNode {
