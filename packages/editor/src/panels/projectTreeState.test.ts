@@ -4,6 +4,8 @@ import {
   INITIAL_PROJECT_TREE_STATE,
   classifyProjectEntry,
   joinProjectPath,
+  breadcrumbSegments,
+  parentProjectPath,
   projectTreeReducer,
   type ProjectTreeState,
 } from "./projectTreeState.js";
@@ -127,5 +129,29 @@ describe("projectTreeReducer", () => {
     expect(next.selectedPath).toBe("models/car.glb");
     expect(next.nodes).toBe(INITIAL_PROJECT_TREE_STATE.nodes);
     expect(next.expandedPaths).toBe(INITIAL_PROJECT_TREE_STATE.expandedPaths);
+  });
+});
+
+describe("breadcrumbSegments", () => {
+  it("scompone un percorso di primo livello in un solo segmento", () => {
+    expect(breadcrumbSegments("Assets")).toEqual(["Assets"]);
+  });
+
+  it("scompone un percorso annidato nei suoi segmenti, in ordine", () => {
+    expect(breadcrumbSegments("Assets/Models/Trees")).toEqual(["Assets", "Models", "Trees"]);
+  });
+});
+
+describe("parentProjectPath", () => {
+  it("restituisce null per un elemento di primo livello (risalire esce dalla griglia)", () => {
+    expect(parentProjectPath("Assets")).toBeNull();
+  });
+
+  it("risale di un livello per un percorso annidato", () => {
+    expect(parentProjectPath("Assets/Models/Trees")).toBe("Assets/Models");
+  });
+
+  it("risale di un livello da una cartella a due livelli fino al primo", () => {
+    expect(parentProjectPath("Assets/Models")).toBe("Assets");
   });
 });

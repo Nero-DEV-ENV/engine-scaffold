@@ -1,8 +1,15 @@
 import "fake-indexeddb/auto";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { _resetAssetPersistenceForTests, loadAsset } from "../persistence/AssetPersistence.js";
 import { assetsStore } from "../store/editorStore.js";
-import { detectAssetKind, importAssetFile, removeAsset, refreshAssets, getAssetObjectURL } from "./assetsController.js";
+import {
+  detectAssetKind,
+  importAssetFile,
+  importProjectFile,
+  removeAsset,
+  refreshAssets,
+  getAssetObjectURL,
+} from "./assetsController.js";
 
 function makeFile(name: string, type: string, content = "contenuto"): File {
   return new File([content], name, { type });
@@ -56,6 +63,54 @@ describe("assetsController", () => {
       const meta = await importAssetFile(makeFile("personaggio.fbx", "application/octet-stream"));
       expect(meta).toBeNull();
       expect(assetsStore.get()).toEqual([]);
+    });
+  });
+
+  describe("importProjectFile", () => {
+    // Nessun host-agent reale disponibile in questo ambiente di test: a
+    // differenza di IndexedDB (fake-indexeddb/auto, un polyfill REALE
+    // dell'API, non un mock della logica), qui non esiste un equivalente
+    // "reale mancante" da collegare — solo `globalThis.fetch` va sostituito
+    // per il confine di rete, ripristinato subito dopo ogni test.
+    const originalFetch = globalThis.fetch;
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+    });
+
+    it("scarica i byte via host-agent e li importa come un File normale", async () => {
+      globalThis.fetch = (async () =>
+        new Response(new TextEncoder().encode("contenuto"), {
+          status: 200,
+          headers: { "Content-Type": "model/gltf-binary" },
+        })) as typeof fetch;
+
+      const meta = await importProjectFile("Assets/albero.glb", "albero.glb");
+      expect(meta).not.toBeNull();
+      expect(meta?.kind).toBe("model-gltf");
+      expect(meta?.name).toBe("albero.glb");
+      expect(assetsStore.get()).toHaveLength(1);
+    });
+
+    it("restituisce null se il download fallisce (agente non raggiungibile)", async () => {
+      globalThis.fetch = (async () => {
+        throw new Error("offline");
+      }) as typeof fetch;
+
+      const meta = await importProjectFile("Assets/albero.glb", "albero.glb");
+      expect(meta).toBeNull();
+      expect(assetsStore.get()).toEqual([]);
+    });
+
+    it("restituisce null per un formato non supportato, anche se il download riesce", async () => {
+      globalThis.fetch = (async () =>
+        new Response(new TextEncoder().encode("contenuto"), {
+          status: 200,
+          headers: { "Content-Type": "application/octet-stream" },
+        })) as typeof fetch;
+
+      const meta = await importProjectFile("Assets/personaggio.fbx", "personaggio.fbx");
+      expect(meta).toBeNull();
     });
   });
 

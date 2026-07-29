@@ -5,6 +5,8 @@ import { importAssetFile, removeAsset, refreshAssets } from "../assets/assetsCon
 import type { AssetMeta } from "../persistence/AssetPersistence.js";
 import { PlusIcon, RemoveIcon, ModelIcon } from "../icons.js";
 import { ProjectTree } from "./ProjectTree.js";
+import { ProjectFolderGrid } from "./ProjectFolderGrid.js";
+import { viewedFolderStore } from "../network/projectFolderClient.js";
 
 /**
  * AssetsPanel — pannello "Project window"-style (Fase 7, punto aperto 4:
@@ -30,8 +32,15 @@ import { ProjectTree } from "./ProjectTree.js";
  * via host-agent `/project/*`, vedi `panels/ProjectTree.tsx`; sostituisce
  * il placeholder statico `.project-panel-tree` di Fase 9) accanto a
  * `.project-panel-content`, che contiene la stessa lista/logica di prima
- * (import/lista/rimuovi, invariata — resta un percorso parallelo, non
- * collegato all'albero: l'integrazione arriva in Fase 10C).
+ * (import/lista/rimuovi, invariata).
+ *
+ * Fase 10C — i due percorsi (albero filesystem vs lista Assets importati)
+ * sono ora collegati: un doppio click su un modello nell'albero importa e
+ * aggiunge subito alla scena; un doppio click su una cartella apre il suo
+ * contenuto qui al posto della lista classica (`viewedFolderStore`,
+ * `panels/ProjectFolderGrid.tsx`) — un solo pannello, una sola vista alla
+ * volta. La lista Assets classica sotto resta invariata quando
+ * `viewedFolderStore` è `null` (nessuna cartella in vista).
  *
  * Fase 9 — su richiesta dell'utente il bottone testuale "Aggiungi alla
  * scena" per i modelli è sostituito da un'icona SVG puramente decorativa
@@ -48,6 +57,7 @@ import { ProjectTree } from "./ProjectTree.js";
 export function AssetsPanel(): JSX.Element {
   const assets = assetsStore.useValue();
   const handle = editorSceneHandleStore.useValue();
+  const viewedFolder = viewedFolderStore.useValue();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [addingId, setAddingId] = useState<string | null>(null);
@@ -114,52 +124,56 @@ export function AssetsPanel(): JSX.Element {
             ProjectTree.tsx per l'albero navigabile reale (host-agent
             /project/*). */}
         <ProjectTree />
-        <div className="project-panel-content">
-          {assets.length === 0 ? (
-            <p className="panel-placeholder">Nessun asset importato.</p>
-          ) : (
-            <ul className="assets-list">
-              {assets.map((asset) => (
-                <li key={asset.id} className="assets-row">
-                  {asset.kind === "model-gltf" && (
-                    <span className="assets-row-icon">
-                      <ModelIcon />
+        {viewedFolder !== null ? (
+          <ProjectFolderGrid />
+        ) : (
+          <div className="project-panel-content">
+            {assets.length === 0 ? (
+              <p className="panel-placeholder">Nessun asset importato.</p>
+            ) : (
+              <ul className="assets-list">
+                {assets.map((asset) => (
+                  <li key={asset.id} className="assets-row">
+                    {asset.kind === "model-gltf" && (
+                      <span className="assets-row-icon">
+                        <ModelIcon />
+                      </span>
+                    )}
+                    <span
+                      className={
+                        asset.kind === "model-gltf"
+                          ? `assets-row-name assets-row-name-interactive${
+                              addingId === asset.id ? " assets-row-name-adding" : ""
+                            }`
+                          : "assets-row-name"
+                      }
+                      onDoubleClick={asset.kind === "model-gltf" ? () => void onAddToScene(asset) : undefined}
+                      title={
+                        asset.kind === "model-gltf"
+                          ? addingId === asset.id
+                            ? "Aggiunta in corso…"
+                            : "Doppio click per aggiungere alla scena"
+                          : undefined
+                      }
+                    >
+                      {asset.name}
                     </span>
-                  )}
-                  <span
-                    className={
-                      asset.kind === "model-gltf"
-                        ? `assets-row-name assets-row-name-interactive${
-                            addingId === asset.id ? " assets-row-name-adding" : ""
-                          }`
-                        : "assets-row-name"
-                    }
-                    onDoubleClick={asset.kind === "model-gltf" ? () => void onAddToScene(asset) : undefined}
-                    title={
-                      asset.kind === "model-gltf"
-                        ? addingId === asset.id
-                          ? "Aggiunta in corso…"
-                          : "Doppio click per aggiungere alla scena"
-                        : undefined
-                    }
-                  >
-                    {asset.name}
-                  </span>
-                  <span className="assets-row-kind">{asset.kind === "model-gltf" ? "Modello" : "Texture"}</span>
-                  <button
-                    type="button"
-                    className="inspector-delete-button"
-                    onClick={() => void onRemove(asset)}
-                    aria-label={`Rimuovi ${asset.name}`}
-                    title="Rimuovi"
-                  >
-                    <RemoveIcon />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+                    <span className="assets-row-kind">{asset.kind === "model-gltf" ? "Modello" : "Texture"}</span>
+                    <button
+                      type="button"
+                      className="inspector-delete-button"
+                      onClick={() => void onRemove(asset)}
+                      aria-label={`Rimuovi ${asset.name}`}
+                      title="Rimuovi"
+                    >
+                      <RemoveIcon />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

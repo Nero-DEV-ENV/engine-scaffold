@@ -1170,6 +1170,14 @@ body {
   color: var(--text-bright);
 }
 
+/* Fase 10C — import in corso (doppio click su un modello): stesso
+   linguaggio visivo di `.assets-row-name-adding` nella lista Assets
+   classica. */
+.project-tree-row-importing {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
 /* Triangolo CSS puro (nessuna nuova icona SVG con prop: le icone
    condivise in icons.tsx restano senza parametri, stessa convenzione di
    PlusIcon/RemoveIcon) — ruota di 90° da chiuso ad espanso. */
@@ -1273,4 +1281,114 @@ body {
   letter-spacing: 0.04em;
   color: var(--text-label);
   text-align: center;
+}
+
+/* Fase 10C — ProjectFolderGrid.tsx: vista "contenuto cartella" dell'Asset
+   manager, mostrata al posto di `.project-panel-content` classica
+   (lista a righe, invariata) quando una cartella è in vista
+   (`viewedFolderStore`). Stesso slot flex del genitore `.project-panel`
+   (fianco a fianco con `.project-panel-tree`, 160px fisso). */
+.project-folder-grid {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.project-grid-breadcrumb {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.project-grid-back-button {
+  flex: 0 0 auto;
+}
+
+.project-grid-breadcrumb-sep {
+  color: var(--text-label);
+  margin: 0 2px;
+}
+
+.project-grid-breadcrumb-segment {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.project-grid-breadcrumb-segment:hover:not(:disabled) {
+  color: var(--text-bright);
+  text-decoration: underline;
+}
+
+.project-grid-breadcrumb-current {
+  color: var(--text-primary);
+  cursor: default;
+  font-weight: 600;
+}
+
+/* Griglia a icone grandi (a differenza della lista Assets classica a
+   righe, icona piccola inline) — icona + nome centrato sotto, stile file
+   browser. Le icone SVG restano 16×16 in `icons.tsx` (nessuna variante
+   "large"): l'ingrandimento è solo qui via CSS. */
+.project-grid {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  overflow-y: auto;
+  align-content: start;
+}
+
+.project-grid-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 4px;
+  border-radius: var(--radius-md);
+  cursor: default;
+  text-align: center;
+}
+
+.project-grid-item:hover {
+  background: var(--bg-accent-muted);
+}
+
+.project-grid-item-importing {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.project-grid-icon {
+  display: flex;
+  color: var(--text-secondary);
+}
+
+.project-grid-icon svg {
+  width: 36px;
+  height: 36px;
+}
+
+.project-grid-name {
+  font-size: 11px;
+  color: var(--text-primary);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }

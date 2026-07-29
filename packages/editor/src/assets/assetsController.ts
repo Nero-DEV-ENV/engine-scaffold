@@ -1,6 +1,7 @@
 import { saveAsset, loadAsset, listAssets, deleteAsset } from "../persistence/AssetPersistence.js";
 import type { AssetKind, AssetMeta } from "../persistence/AssetPersistence.js";
 import { assetsStore } from "../store/editorStore.js";
+import { fetchProjectFile } from "../network/projectFolderClient.js";
 
 /**
  * assetsController.ts — orchestrazione fra il file picker del browser
@@ -64,6 +65,27 @@ export async function importAssetFile(file: File): Promise<AssetMeta | null> {
   await saveAsset({ ...meta, data });
   await refreshAssets();
   return meta;
+}
+
+/**
+ * Fase 10C — importa un file già presente nella project folder aperta
+ * (doppio click su un modello in `ProjectTree.tsx`/`ProjectFolderGrid.tsx`),
+ * scaricandone i byte via host-agent (`fetchProjectFile`, `GET
+ * /project/file`) invece che da un `File` scelto con `<input
+ * type="file">`. Costruisce un `File` in memoria dai byte ricevuti e riusa
+ * INTERAMENTE `importAssetFile` sotto: stessa rilevazione del formato
+ * (`detectAssetKind`, per estensione/MIME), stessa persistenza IndexedDB,
+ * stesso comportamento sui duplicati (nessuna deduplica — punto aperto 3
+ * confermato dall'utente: ogni import genera un nuovo record, coerente col
+ * flusso `<input type="file">` esistente). Restituisce `null` se il
+ * download fallisce (agente non raggiungibile, percorso non valido) o se
+ * il formato non è supportato in questa fase.
+ */
+export async function importProjectFile(relativePath: string, name: string): Promise<AssetMeta | null> {
+  const result = await fetchProjectFile(relativePath);
+  if (!result) return null;
+  const file = new File([result.data], name, { type: result.mimeType });
+  return importAssetFile(file);
 }
 
 /** Rimuove un asset importato e aggiorna `assetsStore`. Un GameObject nella scena già istanziato da questo asset (`sourceAssetId`) NON viene toccato: resta con la sua mesh già caricata, semplicemente non sarà più ricostruibile dopo un futuro reload della scena — stesso compromesso di un riferimento penzolante già accettato altrove (punto aperto 5). */

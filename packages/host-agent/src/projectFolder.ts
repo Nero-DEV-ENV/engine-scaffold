@@ -119,6 +119,37 @@ export class ProjectFolderSession {
   }
 
   /**
+   * Legge i byte grezzi di un file dentro la project root corrente (Fase
+   * 10C — serve i modelli/texture scelti nell'albero/griglia all'editor,
+   * che prima di questa fase importava SOLO da `<input type="file">`).
+   * Stessa guardia anti path-traversal di `listDirectory`
+   * (`resolveWithinRoot`). `null` se: nessuna root aperta, `relativePath`
+   * esce dalla root, il percorso non esiste, o risulta essere una cartella
+   * e non un file — leggere una cartella come file è un intent non valido,
+   * stesso trattamento "richiesta ignorata" già usato altrove (es.
+   * `removeGameObject` su un id sconosciuto in EditorRoom.ts).
+   */
+  async readFile(relativePath: string): Promise<Buffer | null> {
+    if (this.rootPath === null) return null;
+    const target = resolveWithinRoot(this.rootPath, relativePath);
+    if (target === null) return null;
+
+    let stats;
+    try {
+      stats = await fsp.stat(target);
+    } catch {
+      return null;
+    }
+    if (!stats.isFile()) return null;
+
+    try {
+      return await fsp.readFile(target);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Elenca il contenuto di `relativePath` (relativo alla root corrente,
    * `"."` per la root stessa) — cartelle prima dei file, poi ordine
    * alfabetico; le voci in `DEFAULT_IGNORED_NAMES` sono filtrate. `null`

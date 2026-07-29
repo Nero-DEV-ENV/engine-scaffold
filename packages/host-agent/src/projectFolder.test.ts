@@ -135,4 +135,44 @@ describe("ProjectFolderSession", () => {
     expect(DEFAULT_IGNORED_NAMES.has("node_modules")).toBe(true);
     expect(DEFAULT_IGNORED_NAMES.has(".git")).toBe(true);
   });
+
+  describe("readFile", () => {
+    it("restituisce null se nessuna root è aperta", async () => {
+      const session = new ProjectFolderSession();
+      await expect(session.readFile("readme.md")).resolves.toBeNull();
+    });
+
+    it("legge i byte reali di un file dentro la root", async () => {
+      const session = new ProjectFolderSession();
+      session.openRoot(fixtureRoot);
+      const data = await session.readFile("Assets/model.glb");
+      expect(data).not.toBeNull();
+      expect(Buffer.isBuffer(data)).toBe(true);
+    });
+
+    it("legge un file in una sottocartella annidata", async () => {
+      const session = new ProjectFolderSession();
+      session.openRoot(fixtureRoot);
+      const data = await session.readFile("Assets/Textures/wall.png");
+      expect(data).not.toBeNull();
+    });
+
+    it("restituisce null per un tentativo di path traversal", async () => {
+      const session = new ProjectFolderSession();
+      session.openRoot(fixtureRoot);
+      await expect(session.readFile("../../fuori")).resolves.toBeNull();
+    });
+
+    it("restituisce null per un percorso inesistente", async () => {
+      const session = new ProjectFolderSession();
+      session.openRoot(fixtureRoot);
+      await expect(session.readFile("Assets/non-esiste.glb")).resolves.toBeNull();
+    });
+
+    it("restituisce null se il percorso è una cartella, non un file", async () => {
+      const session = new ProjectFolderSession();
+      session.openRoot(fixtureRoot);
+      await expect(session.readFile("Assets")).resolves.toBeNull();
+    });
+  });
 });
