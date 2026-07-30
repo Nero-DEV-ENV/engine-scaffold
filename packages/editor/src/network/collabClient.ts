@@ -4,6 +4,7 @@ import type { TransformData, ComponentData, ComponentTypeName } from "@engine/co
 import { serializeTransform, applyTransformData, Component, serializeComponent } from "@engine/core";
 import { createExternalStore, sceneRootsStore, editorSceneHandleStore, bumpTransformVersion } from "../store/editorStore.js";
 import { flattenGameObjects } from "../scene/hierarchy.js";
+import type { ProjectEntry } from "./projectFolderClient.js";
 
 /**
  * collabClient.ts — Fase 6B.client-1: connessione base a `editor_room`
@@ -75,6 +76,13 @@ export interface ComponentStateLike {
   dataJson: string;
 }
 
+/** Shape strutturale minima di una ManifestEntryState ricevuta dal server (Fase 10E, stesso motivo di TransformStateLike sopra). */
+export interface ManifestEntryLike {
+  parentPath: string;
+  name: string;
+  kind: "file" | "directory";
+}
+
 export type ConnectionState =
   | { status: "idle" }
   | { status: "connecting" }
@@ -109,6 +117,45 @@ export const editingByStore = createExternalStore<ReadonlyMap<string, string>>(n
  */
 export const mySessionIdStore = createExternalStore<string | null>(null);
 
+/**
+ * Manifest sincronizzato della project folder (Fase 10E), raggruppato per
+ * `parentPath` — stessa forma di `ProjectEntry[]` restituita da
+ * `listProjectDirectory` (network/projectFolderClient.ts), così che
+ * `panels/ProjectTree.tsx` possa popolare un livello dell'albero SENZA una
+ * scansione locale, quando connessi alla stessa `editor_room` (vedi
+ * `rebuildManifestGroup` sotto). Quando NON connessi, l'albero resta quello
+ * di Fase 10B-10D (solo scansione locale via host-agent) — nessun cambio lì.
+ * Nuova Map ad ogni cambiamento (stesso stile immutabile di
+ * presenceStore/editingByStore sopra).
+ */
+export const manifestEntriesStore = createExternalStore<ReadonlyMap<string, ProjectEntry[]>>(new Map());
+
+/**
+ * Ricostruisce il gruppo di entry per `parentPath` filtrando l'INTERA
+ * `room.state.manifestEntries` (non un delta incrementale) — costo
+ * trascurabile per lo scope v1 (solo glTF/GLB + PNG/JPG, niente scansione
+ * ricorsiva eager, vedi decisione di Fase 10E). Stesso ordinamento
+ * cartelle-poi-file/alfabetico già usato da `listDirectory` lato host-agent,
+ * per rendere il risultato indistinguibile da una scansione locale agli
+ * occhi di `projectTreeState.ts`.
+ */
+function rebuildManifestGroup(parentPath: string): void {
+  if (!activeRoom) return;
+  const entries: ProjectEntry[] = [];
+  (activeRoom.state.manifestEntries as Map<string, ManifestEntryLike>).forEach((entry) => {
+    if (entry.parentPath === parentPath) {
+      entries.push({ name: entry.name, kind: entry.kind });
+    }
+  });
+  entries.sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === "directory" ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  const next = new Map(manifestEntriesStore.get());
+  next.set(parentPath, entries);
+  manifestEntriesStore.set(next);
+}
+
 const DEFAULT_COLYSEUS_URL = "ws://localhost:2567";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- vedi commento su TransformStateLike sopra: il tipo reale di Room/state non è condiviso col client, il confine è strutturale.
@@ -124,6 +171,7 @@ function resetSessionStores(): void {
   presenceStore.set(new Map());
   editingByStore.set(new Map());
   mySessionIdStore.set(null);
+  manifestEntriesStore.set(new Map());
 }
 
 /**
@@ -494,6 +542,26 @@ export async function connect(displayName?: string, transportOverride?: TunnelTr
     });
     detachFns.push(detachEditingByOnRemove);
 
+    // Manifest della project folder (Fase 10E): onAdd copre sia l'hydrate
+    // iniziale (immediate:true, come le altre mappe sopra) sia una entry
+    // pubblicata in seguito da QUALUNQUE client (compreso quello locale
+    // stesso, subito dopo un `sendPublishManifestEntries` — vedi sotto).
+    // L'onChange nested su `entryState` cattura la transizione cartella→file
+    // gestita server-side (stesso motivo già verificato empiricamente per
+    // `componentState`/`transformState` sopra: `kind` è un campo primitivo
+    // diretto, ma comunque non catturato da `onAdd`, che scatta solo alla
+    // creazione dell'entry nella mappa).
+    const detachManifestOnAdd = $(room.state).manifestEntries!.onAdd((entryState: ManifestEntryLike) => {
+      rebuildManifestGroup(entryState.parentPath);
+      $(entryState).onChange(() => rebuildManifestGroup(entryState.parentPath));
+    }, true);
+    detachFns.push(detachManifestOnAdd);
+
+    const detachManifestOnRemove = $(room.state).manifestEntries!.onRemove((entryState: ManifestEntryLike) => {
+      rebuildManifestGroup(entryState.parentPath);
+    });
+    detachFns.push(detachManifestOnRemove);
+
     room.onLeave(() => {
       activeRoom = null;
       detachAll();
@@ -641,6 +709,19 @@ export function sendRemoveComponent(gameObjectId: string, type: ComponentTypeNam
 export function sendUpdateComponent(gameObjectId: string, component: ComponentData): void {
   if (!activeRoom || connectionStore.get().status !== "connected") return;
   activeRoom.send("updateComponent", { gameObjectId, component });
+}
+
+/**
+ * Invia publishManifestEntries al server (Fase 10E) — no-op se non
+ * connessi. Da chiamare da `ProjectTree.tsx` subito dopo un
+ * `listProjectDirectory` riuscito (locale), per contribuire quel livello al
+ * manifest condiviso — qualunque client con una project root aperta può
+ * farlo, nessuna autorità unica (punto 2 del documento di continuazione,
+ * confermato dall'utente).
+ */
+export function sendPublishManifestEntries(parentPath: string, entries: ProjectEntry[]): void {
+  if (!activeRoom || connectionStore.get().status !== "connected") return;
+  activeRoom.send("publishManifestEntries", { parentPath, entries });
 }
 
 /**
