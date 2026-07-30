@@ -79,6 +79,21 @@ export function parentProjectPath(relativePath: string): string | null {
   return segments.length === 0 ? null : segments.join("/");
 }
 
+/**
+ * Fase 10G — dati i percorsi relativi segnalati come cambiati dal watch
+ * automatico (`network/projectFolderClient.ts`, canale WS
+ * `/project/watch`), restituisce quali fra questi vanno ricaricati ORA:
+ * solo la root (`PROJECT_TREE_ROOT_PATH`, sempre tracciata: il primo
+ * `useEffect` di `ProjectTree.tsx` la carica al mount) e i nodi che questo
+ * client ha già espanso — mai un livello mai guardato. Stesso invariante
+ * già rispettato dall'effetto che applica il manifest sincronizzato
+ * (Fase 10E): il watch aggiunge un secondo TRIGGER a quello manuale
+ * (espansione), non un push indiscriminato per l'intero albero.
+ */
+export function changedPathsToReload(changedPaths: readonly string[], expandedPaths: ReadonlySet<string>): string[] {
+  return changedPaths.filter((path) => path === PROJECT_TREE_ROOT_PATH || expandedPaths.has(path));
+}
+
 export type ProjectNodeLoadState = "idle" | "loading" | "loaded" | "error";
 
 export interface ProjectTreeNode {

@@ -8,6 +8,8 @@ import {
   openProjectRoot,
   closeProjectRoot,
   listProjectDirectory,
+  projectChangeStore,
+  ensureProjectWatchMonitoring,
 } from "../network/projectFolderClient.js";
 import { agentConnectionStore, ensureAgentMonitoring } from "../network/hostAgentClient.js";
 import { connectionStore, manifestEntriesStore, sendPublishManifestEntries } from "../network/collabClient.js";
@@ -19,6 +21,7 @@ import {
   projectTreeReducer,
   joinProjectPath,
   classifyProjectEntry,
+  changedPathsToReload,
 } from "./projectTreeState.js";
 
 const INDENT_PX_PER_DEPTH = 14;
@@ -103,6 +106,9 @@ export function ProjectTree(): JSX.Element {
     // deve dipendere dall'ordine di montaggio dei fratelli.
     ensureAgentMonitoring();
     void refreshProjectStatus();
+    // Fase 10G — stesso discorso, canale separato: idempotente, sicuro da
+    // richiamare a ogni mount.
+    ensureProjectWatchMonitoring();
   }, []);
 
   useEffect(() => {
@@ -154,6 +160,21 @@ export function ProjectTree(): JSX.Element {
       }
     }
   }, [collabStatus, manifestByPath, tree.expandedPaths]);
+
+  const lastProjectChange = projectChangeStore.useValue();
+  useEffect(() => {
+    // Fase 10G — un cambiamento rilevato FUORI dall'editor (git pull,
+    // altro strumento) su una cartella già tracciata (root o nodo
+    // espanso): ricarica via `loadDirectory`, che aggiorna la vista
+    // locale E ripubblica il manifest condiviso (Fase 10E) per quel
+    // livello — stesso percorso già preso da un'espansione manuale, solo
+    // innescato automaticamente stavolta. Mai un livello mai guardato
+    // (`changedPathsToReload`, vedi projectTreeState.ts).
+    if (lastProjectChange === null) return;
+    for (const path of changedPathsToReload(lastProjectChange.changedPaths, tree.expandedPaths)) {
+      void loadDirectory(path);
+    }
+  }, [lastProjectChange, tree.expandedPaths]);
 
   async function onOpen(): Promise<void> {
     setOpenError(null);

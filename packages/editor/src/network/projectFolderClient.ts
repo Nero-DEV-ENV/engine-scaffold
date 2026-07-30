@@ -7,13 +7,20 @@ import { createExternalStore } from "../store/editorStore.js";
  *
  * Stesso processo host-agent di `hostAgentClient.ts` (stessa porta 4100):
  * la raggiungibilità è la STESSA, quindi questo modulo non introduce un
- * secondo meccanismo di connessione — la UI (`panels/ProjectTree.tsx`)
+ * secondo meccanismo di connessione HTTP — la UI (`panels/ProjectTree.tsx`)
  * legge `agentConnectionStore`, già esportato da `hostAgentClient.ts`
  * (connesso via il WebSocket `/server/logs`), per sapere se l'agente è
- * online. Nessun canale WS dedicato per `/project/*` in questa fase (come
- * già notato in `projectFolder.ts` lato host-agent): ogni chiamata qui è
- * un fetch HTTP puntuale, innescato da un'azione esplicita dell'utente
- * (apri cartella, espandi nodo) — mai un poll/refresh automatico.
+ * online. Ogni chiamata HTTP qui resta un fetch puntuale, innescato da
+ * un'azione esplicita dell'utente (apri cartella, espandi nodo) — mai un
+ * poll/refresh automatico.
+ *
+ * Fase 10G — `ensureProjectWatchMonitoring()`/`projectChangeStore` sotto
+ * sono l'eccezione: un canale WS DEDICATO (`/project/watch`, separato da
+ * `/server/logs` — stessa logica di separazione già motivata lato
+ * host-agent in `httpServer.ts`) per il watch automatico del filesystem,
+ * stesso pattern di `ensureAgentMonitoring()` in `hostAgentClient.ts`
+ * (connessione persistente, riconnessione automatica, nessun `disconnect`
+ * simmetrico).
  *
  * `ProjectEntry`/`ProjectFolderState` duplicano la shape dei tipi omonimi
  * in `packages/host-agent/src/projectFolder.ts` invece di condividerli via
@@ -47,6 +54,67 @@ export const projectRootStore = createExternalStore<string | null>(null);
  * "agganciato" a un percorso di una project folder ormai diversa/chiusa.
  */
 export const viewedFolderStore = createExternalStore<string | null>(null);
+
+/**
+ * Fase 10G — ultima notifica ricevuta sul canale WS `/project/watch`:
+ * i percorsi relativi (stile POSIX, "." per la root) delle cartelle
+ * cambiate FUORI dall'editor (git pull, altro strumento, ecc.), già
+ * raggruppate/deduplicate lato host-agent (debounce, vedi
+ * `ProjectFolderSession.queueChangedPath`/`flushChangedPaths`). `null`
+ * finché non arriva la prima notifica. `panels/ProjectTree.tsx` decide
+ * quali fra questi ricaricare (`changedPathsToReload` in
+ * `panels/projectTreeState.ts`) — questo modulo si limita a inoltrare il
+ * messaggio, nessuna logica sui percorsi qui.
+ */
+export const projectChangeStore = createExternalStore<{ changedPaths: string[] } | null>(null);
+
+const WATCH_RECONNECT_DELAY_MS = 3000;
+
+function watchWsUrl(): string {
+  return `${httpBaseUrl().replace(/^http/, "ws")}/project/watch`;
+}
+
+let watchSocket: WebSocket | null = null;
+let watchReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let watchMonitoringStarted = false;
+
+function scheduleWatchReconnect(): void {
+  if (watchReconnectTimer) return;
+  watchReconnectTimer = setTimeout(() => {
+    watchReconnectTimer = null;
+    openWatchSocket();
+  }, WATCH_RECONNECT_DELAY_MS);
+}
+
+function openWatchSocket(): void {
+  const ws = new WebSocket(watchWsUrl());
+  watchSocket = ws;
+
+  ws.onmessage = (event) => {
+    const message = JSON.parse(String(event.data)) as { kind: "changed"; changedPaths: string[] };
+    projectChangeStore.set({ changedPaths: message.changedPaths });
+  };
+
+  ws.onclose = () => {
+    if (watchSocket === ws) watchSocket = null;
+    scheduleWatchReconnect();
+  };
+}
+
+/**
+ * Avvia la sottoscrizione al canale WS `/project/watch` (Fase 10G).
+ * Idempotente — stesso pattern di `ensureAgentMonitoring()` in
+ * `hostAgentClient.ts`: sicuro da chiamare più volte (es. React
+ * StrictMode), resta collegato per tutta la vita dell'editor (nessun
+ * `disconnect` simmetrico), riconnette da sé se l'agente non è
+ * raggiungibile o non ha ancora una root aperta — in quel caso il
+ * canale semplicemente non emette nulla, nessun errore da gestire qui.
+ */
+export function ensureProjectWatchMonitoring(): void {
+  if (watchMonitoringStarted) return;
+  watchMonitoringStarted = true;
+  openWatchSocket();
+}
 
 /**
  * Interroga `GET /project/status` e allinea `projectRootStore` allo stato

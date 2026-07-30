@@ -3,7 +3,7 @@ import path from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import type { ProcessSupervisor, AgentState, LogEntry } from "./processSupervisor.js";
 import type { TunnelHostSession, TunnelHostState } from "./tunnelHostSession.js";
-import type { ProjectFolderSession } from "./projectFolder.js";
+import type { ProjectFolderSession, ProjectChangeEvent } from "./projectFolder.js";
 
 /**
  * httpServer.ts — Fase 6F.3.a (endpoint /server/*) + Fase 6F.3.b (endpoint
@@ -15,15 +15,20 @@ import type { ProjectFolderSession } from "./projectFolder.js";
  * la Room Colyseus al guest da remoto, questo espone il controllo locale
  * al browser dello stesso utente).
  *
- * /project/* non ha un canale WS dedicato (a differenza di /server/logs e
- * /tunnel/host/state) — Fase 10A non ha ancora un consumer che necessiti
- * push in tempo reale; la UI di Fase 10B interrogherà via HTTP a comando.
+ * Fase 10G — `/project/*` ha ORA un terzo canale WS dedicato,
+ * `/project/watch`: il watch automatico del filesystem lato
+ * `ProjectFolderSession` (evento `"changed"`) ha finalmente un consumer
+ * real-time, cosa che non era vera nelle fasi 10A-10F (dove ogni
+ * interazione con `/project/*` restava un fetch HTTP puntuale innescato
+ * da un'azione esplicita dell'utente).
  *
- * DUE canali WS separati invece di uno condiviso: "/server/logs" porta
+ * TRE canali WS separati invece di uno condiviso: "/server/logs" porta
  * AgentState+LogEntry (stdout/stderr di un processo figlio spawnato),
- * "/tunnel/host/state" porta solo TunnelHostState — la sessione tunnel
- * gira IN-PROCESS (vedi tunnelHostSession.ts), non ha stdout/stderr da un
- * child process, mescolarla nel canale "logs" sarebbe fuorviante.
+ * "/tunnel/host/state" porta solo TunnelHostState (la sessione tunnel
+ * gira IN-PROCESS, niente stdout/stderr da un child process — mescolarla
+ * nel canale "logs" sarebbe fuorviante), "/project/watch" porta solo
+ * `ProjectChangeEvent` (percorsi cambiati sotto la project folder) — stessa
+ * logica di separazione, contenuti troppo diversi per un canale unico.
  *
  * Nessun controllo qui che packages/server sia "running" prima di
  * accettare POST /tunnel/host/offer (decisione utente, Fase 6F.3.b):
@@ -40,6 +45,7 @@ import type { ProjectFolderSession } from "./projectFolder.js";
 
 type ControlMessage = { kind: "state"; state: AgentState } | { kind: "log"; entry: LogEntry };
 type TunnelControlMessage = { kind: "state"; state: TunnelHostState };
+type ProjectWatchMessage = { kind: "changed"; changedPaths: string[] };
 
 export function createHostAgentServer(
   supervisor: ProcessSupervisor,
@@ -60,12 +66,19 @@ export function createHostAgentServer(
     attachTunnelStateSocket(socket, tunnelHost);
   });
 
+  const projectWatchWss = new WebSocketServer({ noServer: true });
+  projectWatchWss.on("connection", (socket) => {
+    attachProjectWatchSocket(socket, projectFolder);
+  });
+
   server.on("upgrade", (req, socket, head) => {
     const url = req.url ?? "";
     if (url === "/server/logs") {
       logsWss.handleUpgrade(req, socket, head, (ws) => logsWss.emit("connection", ws));
     } else if (url === "/tunnel/host/state") {
       tunnelStateWss.handleUpgrade(req, socket, head, (ws) => tunnelStateWss.emit("connection", ws));
+    } else if (url === "/project/watch") {
+      projectWatchWss.handleUpgrade(req, socket, head, (ws) => projectWatchWss.emit("connection", ws));
     } else {
       socket.destroy();
     }
@@ -336,5 +349,26 @@ function attachTunnelStateSocket(socket: WebSocket, tunnelHost: TunnelHostSessio
 
   socket.on("close", () => {
     tunnelHost.off("state", onState);
+  });
+}
+
+/**
+ * Fase 10G — nessuno stato/storico da rispedire alla connessione (a
+ * differenza dei log): un client che si collega ora non ha bisogno di
+ * sapere cosa è cambiato PRIMA di collegarsi, solo cosa cambia da qui in
+ * avanti — stessa logica già usata per `attachTunnelStateSocket` (nessuna
+ * transizione passata ha senso per un nuovo consumer), applicata qui a un
+ * flusso di eventi invece che a uno stato.
+ */
+function attachProjectWatchSocket(socket: WebSocket, projectFolder: ProjectFolderSession): void {
+  const send = (message: ProjectWatchMessage): void => {
+    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+  };
+
+  const onChanged = (event: ProjectChangeEvent): void => send({ kind: "changed", changedPaths: event.changedPaths });
+  projectFolder.on("changed", onChanged);
+
+  socket.on("close", () => {
+    projectFolder.off("changed", onChanged);
   });
 }
