@@ -61,6 +61,16 @@ import type { TransformData, ComponentData } from "@engine/core";
  * componenti (MeshRenderer/Light/RigidBody/BoxCollider/SphereCollider) su
  * un GameObject già esistente. Vedi il JSDoc di `ComponentState` sotto per
  * la forma esatta e il perché di `dataJson` invece di campi per-property.
+ *
+ * Fase 10E aggiunge `manifestEntries`: sync del MANIFEST della project
+ * folder (percorsi/nome/tipo di ogni file/cartella scansionato, MAI i
+ * byte — vedi decisione architetturale di Fase 10). Mappa PIATTA per
+ * percorso relativo dell'ENTRY stessa (non annidata per cartella), stesso
+ * motivo di `components` sopra con chiave composita: più semplice da
+ * aggiornare/testare di una struttura ad albero, e coerente con lo stato
+ * locale a mappa piatta di `projectTreeState.ts` lato editor. Vedi JSDoc di
+ * `ManifestEntryState` sotto per la forma esatta e il modello di autorità
+ * (nessuna, deciso con l'utente).
  */
 
 export class Vector3State extends Schema {
@@ -135,12 +145,65 @@ export class ComponentState extends Schema {
   @type("string") dataJson = "{}";
 }
 
+/**
+ * Sentinel per la project root stessa (Fase 10E) — stesso valore esatto di
+ * `PROJECT_TREE_ROOT_PATH` in `packages/editor/src/panels/projectTreeState.ts`
+ * (duplicato qui, non condiviso: server ed editor non condividono un
+ * modulo comune per questo confine, stesso principio già seguito per
+ * `ProjectEntry` in `network/projectFolderClient.ts`).
+ */
+export const MANIFEST_ROOT_PATH = ".";
+
+/**
+ * Stato sincronizzato di UNA entry del manifest della project folder
+ * (Fase 10E). Chiave nella mappa `EditorRoomState.manifestEntries`: il
+ * percorso relativo dell'entry stessa (`manifestEntryPath(parentPath,
+ * name)` sotto) — es. "Assets/model.glb", o "Assets" per un'entry di primo
+ * livello (`parentPath === MANIFEST_ROOT_PATH`).
+ *
+ * `parentPath` è duplicato come campo proprio (oltre a far parte
+ * implicitamente della chiave) per permettere a `EditorRoom.ts` di trovare
+ * "tutte le entry di un livello" filtrando per questo campo, senza dover
+ * fare parsing della chiave stessa — stesso compromesso già accettato per
+ * `gameObjectId`/`type` duplicati in `ComponentState` sopra.
+ *
+ * Modello di autorità (punto 2 del documento di continuazione, confermato
+ * dall'utente): NESSUNA. Qualunque client con una project root aperta può
+ * pubblicare/ripubblicare un livello (`publishManifestEntries` in
+ * EditorRoom.ts) — chi pubblica per ULTIMO per un dato `parentPath` è
+ * quello che vince, stesso stile "ultimo che scrive vince" già accettato
+ * per `commitTransform`. Deciso così per evitare la fragilità di un client
+ * "sorgente di verità" che si disconnette (rischio esplicitamente segnalato
+ * nel documento di continuazione per l'alternativa "primo client apre la
+ * root = autorità").
+ */
+export class ManifestEntryState extends Schema {
+  @type("string") parentPath = "";
+  @type("string") name = "";
+  @type("string") kind = "file";
+}
+
 export class EditorRoomState extends Schema {
   @type({ map: TransformState }) transforms = new MapSchema<TransformState>();
   @type({ map: ClientInfo }) clients = new MapSchema<ClientInfo>();
   @type({ map: "string" }) editingBy = new MapSchema<string>();
   @type({ map: GameObjectMetaState }) gameObjectMeta = new MapSchema<GameObjectMetaState>();
   @type({ map: ComponentState }) components = new MapSchema<ComponentState>();
+  @type({ map: ManifestEntryState }) manifestEntries = new MapSchema<ManifestEntryState>();
+}
+
+/** Costruisce la chiave/percorso di una entry di manifest (Fase 10E) — stessa regola esatta di `joinProjectPath` in `projectTreeState.ts` lato editor. */
+export function manifestEntryPath(parentPath: string, name: string): string {
+  return parentPath === MANIFEST_ROOT_PATH ? name : `${parentPath}/${name}`;
+}
+
+/** Costruisce una nuova ManifestEntryState (Fase 10E, usato in `publishManifestEntries`). */
+export function toManifestEntryState(parentPath: string, name: string, kind: "file" | "directory"): ManifestEntryState {
+  const state = new ManifestEntryState();
+  state.parentPath = parentPath;
+  state.name = name;
+  state.kind = kind;
+  return state;
 }
 
 /** Costruisce la chiave composita usata da `EditorRoomState.components` (Fase 6D). Vedi JSDoc di `ComponentState` sopra. */

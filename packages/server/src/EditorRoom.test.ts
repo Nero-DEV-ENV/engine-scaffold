@@ -758,4 +758,136 @@ describe("EditorRoom", () => {
       expect(received).toBe(false);
     });
   });
+
+  describe("manifest della project folder (Fase 10E)", () => {
+    it("publishManifestEntries popola manifestEntries per il livello pubblicato", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("publishManifestEntries", {
+        parentPath: ".",
+        entries: [
+          { name: "Assets", kind: "directory" },
+          { name: "readme.txt", kind: "file" },
+        ],
+      });
+
+      await waitFor(() => room.state.manifestEntries.size === 2);
+      expect(room.state.manifestEntries.get("Assets")?.kind).toBe("directory");
+      expect(room.state.manifestEntries.get("readme.txt")?.kind).toBe("file");
+      expect(room.state.manifestEntries.get("Assets")?.parentPath).toBe(".");
+    });
+
+    it("publishManifestEntries su un livello annidato usa parentPath/name per la chiave", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("publishManifestEntries", {
+        parentPath: "Assets",
+        entries: [{ name: "model.glb", kind: "file" }],
+      });
+
+      await waitFor(() => room.state.manifestEntries.has("Assets/model.glb"));
+      expect(room.state.manifestEntries.get("Assets/model.glb")?.parentPath).toBe("Assets");
+    });
+
+    it("una ripubblicazione dello stesso livello è un diff completo: rimuove un'entry non più presente", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("publishManifestEntries", {
+        parentPath: ".",
+        entries: [
+          { name: "old.txt", kind: "file" },
+          { name: "keep.txt", kind: "file" },
+        ],
+      });
+      await waitFor(() => room.state.manifestEntries.size === 2);
+
+      client.send("publishManifestEntries", { parentPath: ".", entries: [{ name: "keep.txt", kind: "file" }] });
+      await waitFor(() => !room.state.manifestEntries.has("old.txt"));
+
+      expect(room.state.manifestEntries.has("keep.txt")).toBe(true);
+      expect(room.state.manifestEntries.size).toBe(1);
+    });
+
+    it("rimuovere una entry cartella ripulisce ricorsivamente il suo intero sottoalbero già sincronizzato", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("publishManifestEntries", { parentPath: ".", entries: [{ name: "Old", kind: "directory" }] });
+      await waitFor(() => room.state.manifestEntries.has("Old"));
+
+      client.send("publishManifestEntries", {
+        parentPath: "Old",
+        entries: [
+          { name: "Nested", kind: "directory" },
+          { name: "a.glb", kind: "file" },
+        ],
+      });
+      await waitFor(() => room.state.manifestEntries.has("Old/Nested"));
+
+      client.send("publishManifestEntries", { parentPath: "Old/Nested", entries: [{ name: "b.png", kind: "file" }] });
+      await waitFor(() => room.state.manifestEntries.has("Old/Nested/b.png"));
+
+      // "Old" sparisce dal livello radice (es. rimossa su disco, sync esterna già avvenuta).
+      client.send("publishManifestEntries", { parentPath: ".", entries: [] });
+      await waitFor(() => !room.state.manifestEntries.has("Old"));
+
+      expect(room.state.manifestEntries.has("Old/Nested")).toBe(false);
+      expect(room.state.manifestEntries.has("Old/Nested/b.png")).toBe(false);
+      expect(room.state.manifestEntries.has("Old/a.glb")).toBe(false);
+      expect(room.state.manifestEntries.size).toBe(0);
+    });
+
+    it("una entry che passa da cartella a file ripulisce il proprio sottoalbero", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("publishManifestEntries", { parentPath: ".", entries: [{ name: "Assets", kind: "directory" }] });
+      await waitFor(() => room.state.manifestEntries.has("Assets"));
+
+      client.send("publishManifestEntries", { parentPath: "Assets", entries: [{ name: "model.glb", kind: "file" }] });
+      await waitFor(() => room.state.manifestEntries.has("Assets/model.glb"));
+
+      // "Assets" ora risulta un file (caso limite di sync esterna incoerente) invece di una cartella.
+      client.send("publishManifestEntries", { parentPath: ".", entries: [{ name: "Assets", kind: "file" }] });
+      await waitFor(() => room.state.manifestEntries.get("Assets")?.kind === "file");
+
+      expect(room.state.manifestEntries.has("Assets/model.glb")).toBe(false);
+    });
+
+    it("nessuna autorità unica: un secondo client può pubblicare/aggiornare un livello già pubblicato dal primo", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const clientA = await testServer.connectTo(room);
+      const clientB = await testServer.connectTo(room);
+
+      clientA.send("publishManifestEntries", { parentPath: ".", entries: [{ name: "a.txt", kind: "file" }] });
+      await waitFor(() => room.state.manifestEntries.has("a.txt"));
+
+      // clientB (mai il "primo" ad aprire la root) pubblica per lo stesso livello, senza essere respinto.
+      clientB.send("publishManifestEntries", {
+        parentPath: ".",
+        entries: [
+          { name: "a.txt", kind: "file" },
+          { name: "b.txt", kind: "file" },
+        ],
+      });
+      await waitFor(() => room.state.manifestEntries.has("b.txt"));
+
+      expect(room.state.manifestEntries.has("a.txt")).toBe(true);
+      expect(room.state.manifestEntries.has("b.txt")).toBe(true);
+    });
+
+    it("publishManifestEntries con payload malformato viene ignorato", async () => {
+      const room = await testServer.createRoom<EditorRoom>("editor_room");
+      const client = await testServer.connectTo(room);
+
+      client.send("publishManifestEntries", { parentPath: "", entries: [{ name: "x", kind: "file" }] });
+      client.send("publishManifestEntries", { parentPath: ".", entries: [{ name: "x", kind: "cartella-invalida" }] });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      expect(room.state.manifestEntries.size).toBe(0);
+    });
+  });
 });

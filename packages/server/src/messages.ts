@@ -141,6 +141,23 @@ export interface ComponentsRemovedMessage {
   componentKeys: string[];
 }
 
+/**
+ * publishManifestEntries — Fase 10E: pubblica/ripubblica il manifest di UN
+ * livello di cartella (`parentPath`, `MANIFEST_ROOT_PATH` per la root —
+ * vedi `schema/EditorRoomState.ts`) della project folder. Ogni chiamata è
+ * un DIFF COMPLETO di quel livello: `entries` è la lista corrente e
+ * completa di quanto trovato da `listDirectory` lato host-agent per quel
+ * percorso (mai un delta/aggiunta incrementale) — `EditorRoom.ts` calcola
+ * da qui cosa aggiungere/aggiornare/rimuovere. Nessun campo `gameObjectId`-
+ * equivalente per il mittente: nessuna autorità/proprietà del livello
+ * pubblicato (vedi JSDoc di `ManifestEntryState`), quindi il server non ha
+ * bisogno di sapere CHI ha pubblicato, solo COSA.
+ */
+export interface PublishManifestEntriesMessage {
+  parentPath: string;
+  entries: Array<{ name: string; kind: "file" | "directory" }>;
+}
+
 const GAME_OBJECT_KINDS = new Set<GameObjectKind>(["empty", "box", "sphere", "plane"]);
 
 function isGameObjectKind(value: unknown): value is GameObjectKind {
@@ -348,4 +365,22 @@ export function isRemoveComponentMessage(value: unknown): value is RemoveCompone
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
   return typeof v.gameObjectId === "string" && v.gameObjectId.length > 0 && isComponentTypeName(v.type);
+}
+
+/** Validatore per una singola entry di `PublishManifestEntriesMessage.entries` (Fase 10E) — stessa forma di `ProjectEntry` lato host-agent/editor. */
+function isManifestEntryData(value: unknown): value is { name: string; kind: "file" | "directory" } {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.name === "string" && v.name.length > 0 && (v.kind === "file" || v.kind === "directory");
+}
+
+export function isPublishManifestEntriesMessage(value: unknown): value is PublishManifestEntriesMessage {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.parentPath === "string" &&
+    v.parentPath.length > 0 &&
+    Array.isArray(v.entries) &&
+    v.entries.every(isManifestEntryData)
+  );
 }

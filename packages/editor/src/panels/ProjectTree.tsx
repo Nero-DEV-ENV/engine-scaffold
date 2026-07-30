@@ -10,6 +10,7 @@ import {
   listProjectDirectory,
 } from "../network/projectFolderClient.js";
 import { agentConnectionStore, ensureAgentMonitoring } from "../network/hostAgentClient.js";
+import { connectionStore, manifestEntriesStore, sendPublishManifestEntries } from "../network/collabClient.js";
 import { editorSceneHandleStore } from "../store/editorStore.js";
 import { importProjectFile } from "../assets/assetsController.js";
 import {
@@ -55,11 +56,41 @@ const INDENT_PX_PER_DEPTH = 14;
  *   (`viewedFolderStore`, letto da `ProjectFolderGrid.tsx` in
  *   `AssetsPanel.tsx`), che sostituisce temporaneamente la lista Assets
  *   classica finché l'utente non torna alla radice via breadcrumb.
+ *
+ * Fase 10E — sync multiutente del manifest via Colyseus (5 punti del
+ * documento di continuazione, tutte le raccomandazioni confermate senza
+ * modifiche):
+ * 1. Lazy, non eager: nessuna scansione ricorsiva nuova, il manifest è
+ *    sincronizzato un livello alla volta, esattamente come `loadDirectory`
+ *    già fa qui sotto.
+ * 2. Nessuna autorità unica: qualunque client con una root aperta
+ *    pubblica/ripubblica un livello (`sendPublishManifestEntries` in
+ *    `loadDirectory` sotto) — chi pubblica per ultimo per un dato percorso
+ *    vince (vedi `EditorRoom.ts`, `publishManifestEntries`).
+ * 3. Trigger: SOLO l'espansione (o ri-espansione) di un nodo — mai un push
+ *    spontaneo da filesystem watch, fuori scope fino a un'eventuale 10G.
+ * 4. Una entry presente nel manifest condiviso ma assente sul disco locale
+ *    di QUESTO client viene mostrata comunque (nessun flag "verificato" in
+ *    più) — un doppio click che tenta di importarla fallisce silenziosamente
+ *    come già oggi per qualunque intent non valido (`importProjectFile`
+ *    restituisce `null`).
+ * 5. Scope v1: solo struttura (percorsi/nome/tipo) — nessuna evidenziazione
+ *    "aggiunto di recente".
+ *
+ * Quando connessi alla collab room, il manifest sincronizzato (`
+ * manifestEntriesStore` in `collabClient.ts`) è la fonte PREFERITA per ogni
+ * livello che già possiede un'entry lì — chiunque l'abbia pubblicato,
+ * incluso questo stesso client — così un secondo utente vede comparire/
+ * sparire file in un nodo che ha già espanso, senza doverlo ri-espandere
+ * manualmente. Quando NON connessi, comportamento invariato rispetto a
+ * Fase 10B-10D (solo scansione locale via host-agent).
  */
 export function ProjectTree(): JSX.Element {
   const rootPath = projectRootStore.useValue();
   const connection = agentConnectionStore.useValue();
   const agentReachable = connection === "connected";
+  const collabStatus = connectionStore.useValue();
+  const manifestByPath = manifestEntriesStore.useValue();
 
   const [pathInput, setPathInput] = useState("");
   const [openError, setOpenError] = useState<string | null>(null);
@@ -102,7 +133,27 @@ export function ProjectTree(): JSX.Element {
       return;
     }
     dispatch({ type: "load-success", path, entries });
+    // Fase 10E, punto 2: contribuisce questo livello al manifest condiviso
+    // — no-op se non connessi alla collab room. Nessuna autorità unica:
+    // chiunque con una root aperta può pubblicare/ripubblicare un livello.
+    sendPublishManifestEntries(path, entries);
   }
+
+  useEffect(() => {
+    // Fase 10E, punti 2+3: quando connessi, il manifest sincronizzato è la
+    // fonte preferita per ogni livello che già possiede un'entry lì —
+    // ma SOLO per la root e per i nodi che questo client ha già espanso
+    // (mai un livello mai guardato: il trigger resta l'espansione, non un
+    // push spontaneo). Quando non connessi, non fa nulla: comportamento
+    // invariato rispetto a Fase 10B-10D.
+    if (collabStatus.status !== "connected") return;
+    for (const path of [PROJECT_TREE_ROOT_PATH, ...tree.expandedPaths]) {
+      const entries = manifestByPath.get(path);
+      if (entries !== undefined) {
+        dispatch({ type: "load-success", path, entries });
+      }
+    }
+  }, [collabStatus, manifestByPath, tree.expandedPaths]);
 
   async function onOpen(): Promise<void> {
     setOpenError(null);
@@ -119,7 +170,15 @@ export function ProjectTree(): JSX.Element {
   function onToggleDirectory(path: string): void {
     const wasExpanded = tree.expandedPaths.has(path);
     dispatch({ type: "toggle-expand", path });
-    if (!wasExpanded && tree.nodes.get(path) === undefined) {
+    // Fase 10E, fix scoperto in smoke-test: PRIMA si ricaricava solo se
+    // `tree.nodes.get(path) === undefined` (comportamento ereditato da Fase
+    // 10B), quindi una ri-espansione dopo un collasso riusava dati ormai
+    // stantii e non ripubblicava mai un livello aggiornato sul manifest
+    // condiviso — contraddiceva il trigger dichiarato ("ogni espansione o
+    // ri-espansione"). Ora ricarica SEMPRE a un'espansione (mai al
+    // collasso): costo trascurabile (host-agent locale), e tiene la vista
+    // locale coerente col disco reale anche fuori dal contesto Fase 10E.
+    if (!wasExpanded) {
       void loadDirectory(path);
     }
   }

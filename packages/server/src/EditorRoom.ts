@@ -9,6 +9,8 @@ import {
   toComponentState,
   applyComponentDataToState,
   componentKey,
+  manifestEntryPath,
+  toManifestEntryState,
 } from "./schema/EditorRoomState.js";
 import {
   isCommitTransformMessage,
@@ -20,6 +22,7 @@ import {
   isAddComponentMessage,
   isRemoveComponentMessage,
   isUpdateComponentMessage,
+  isPublishManifestEntriesMessage,
 } from "./messages.js";
 import { resolveDisplayName, pickColor } from "./identity.js";
 
@@ -78,6 +81,35 @@ export class EditorRoom extends Room<{ state: EditorRoomState }> {
    * GameObject respinto senza doverli controllare uno per uno.
    */
   private readonly removedComponentKeys = new Set<string>();
+
+  /**
+   * Fase 10E — raccoglie ricorsivamente le chiavi di `manifestEntries` che
+   * discendono (anche indirettamente, tramite il campo `parentPath` di ogni
+   * entry) da `rootKey`. Serve a ripulire un sottoalbero ormai orfano
+   * quando la cartella che lo conteneva sparisce dal livello appena
+   * ripubblicato da un client, o cambia da cartella a file (vedi handler
+   * `publishManifestEntries` sotto): senza questa pulizia, quelle entry
+   * resterebbero per sempre nello stato condiviso, perché nessuno
+   * ripubblica più un `parentPath` che non esiste più localmente per
+   * nessun client. Stesso stile "raccogli-poi-cancella" già usato per
+   * `orphanedComponentKeys` in `removeGameObject` sotto, per non mutare
+   * `manifestEntries` durante l'iterazione delle sue stesse `.entries()`.
+   */
+  private collectManifestSubtreeKeys(rootKey: string): string[] {
+    const result: string[] = [];
+    const stack = [rootKey];
+    while (stack.length > 0) {
+      const current = stack.pop();
+      if (current === undefined) continue;
+      for (const [key, entry] of this.state.manifestEntries.entries()) {
+        if (entry.parentPath === current) {
+          result.push(key);
+          if (entry.kind === "directory") stack.push(key);
+        }
+      }
+    }
+    return result;
+  }
 
   override onCreate(): void {
     this.setState(new EditorRoomState());
@@ -338,6 +370,63 @@ export class EditorRoom extends Room<{ state: EditorRoomState }> {
         componentType: message.component.type,
         timestamp: Date.now(),
       });
+    });
+
+    // publishManifestEntries (Fase 10E): sincronizza il MANIFEST (percorsi/
+    // nome/tipo, MAI i byte — vedi decisione architetturale di Fase 10) di
+    // UN livello di cartella per volta, coerente con `listDirectory`
+    // dell'host-agent (non ricorsiva) e con lo stato locale a mappa piatta
+    // di `projectTreeState.ts` lato editor. Nessuna autorità unica (punto 2,
+    // confermato dall'utente): QUALUNQUE client con una project root aperta
+    // può pubblicare/ripubblicare un livello — chi pubblica per ultimo per
+    // quel `parentPath` vince, stesso stile "ultimo che scrive vince" già
+    // accettato per `commitTransform`. Trigger (punto 3, confermato): SOLO
+    // quando un client espande/riespande un nodo, mai un push spontaneo da
+    // filesystem watch (fuori scope fino a un'eventuale Fase 10G).
+    //
+    // Ogni pubblicazione è un DIFF COMPLETO del livello `parentPath`: le
+    // entry non più presenti nel messaggio vengono rimosse — se un'entry
+    // rimossa era una cartella, l'intero sottoalbero già sincronizzato
+    // sotto di essa viene ripulito ricorsivamente (`collectManifestSubtreeKeys`),
+    // altrimenti resterebbe orfano per sempre (nessuno ripubblica più quel
+    // `parentPath`, che non esiste più localmente per nessun client). Le
+    // entry rimaste/nuove vengono create o aggiornate in place; una
+    // transizione cartella→file (raro, ma possibile su una root
+    // sincronizzata esternamente, es. Git) ripulisce lo stesso modo il
+    // sottoalbero PRIMA di sovrascrivere `kind`.
+    this.onMessage("publishManifestEntries", (_client, message: unknown) => {
+      if (!isPublishManifestEntriesMessage(message)) return;
+      const { parentPath, entries } = message;
+
+      const newKeys = new Set(entries.map((entry) => manifestEntryPath(parentPath, entry.name)));
+
+      const staleKeys = Array.from(this.state.manifestEntries.entries())
+        .filter(([key, entry]) => entry.parentPath === parentPath && !newKeys.has(key))
+        .map(([key]) => key);
+      for (const staleKey of staleKeys) {
+        const staleEntry = this.state.manifestEntries.get(staleKey);
+        if (staleEntry?.kind === "directory") {
+          for (const descendantKey of this.collectManifestSubtreeKeys(staleKey)) {
+            this.state.manifestEntries.delete(descendantKey);
+          }
+        }
+        this.state.manifestEntries.delete(staleKey);
+      }
+
+      for (const entry of entries) {
+        const key = manifestEntryPath(parentPath, entry.name);
+        const existing = this.state.manifestEntries.get(key);
+        if (existing) {
+          if (existing.kind === "directory" && entry.kind === "file") {
+            for (const descendantKey of this.collectManifestSubtreeKeys(key)) {
+              this.state.manifestEntries.delete(descendantKey);
+            }
+          }
+          existing.kind = entry.kind;
+        } else {
+          this.state.manifestEntries.set(key, toManifestEntryState(parentPath, entry.name, entry.kind));
+        }
+      }
     });
   }
 

@@ -9,6 +9,9 @@ import {
   componentKey,
   toComponentState,
   applyComponentDataToState,
+  MANIFEST_ROOT_PATH,
+  manifestEntryPath,
+  toManifestEntryState,
 } from "./EditorRoomState.js";
 
 function sampleComponent(radius = 0.5): ComponentData {
@@ -80,6 +83,38 @@ describe("EditorRoomState — gameObjectMeta (Fase 6C.2)", () => {
     const roomState = new EditorRoomState();
     expect(() => roomState.gameObjectMeta.delete("go-mai-esistito")).not.toThrow();
     expect(roomState.gameObjectMeta.size).toBe(0);
+  });
+});
+
+describe("EditorRoomState — manifestEntries (Fase 10E)", () => {
+  it("manifestEntryPath non aggiunge alcun prefisso per la root", () => {
+    expect(manifestEntryPath(MANIFEST_ROOT_PATH, "Assets")).toBe("Assets");
+  });
+
+  it("manifestEntryPath compone parentPath/name per un livello non-root", () => {
+    expect(manifestEntryPath("Assets", "model.glb")).toBe("Assets/model.glb");
+  });
+
+  it("toManifestEntryState riporta correttamente parentPath/name/kind", () => {
+    const state = toManifestEntryState("Assets", "model.glb", "file");
+    expect(state.parentPath).toBe("Assets");
+    expect(state.name).toBe("model.glb");
+    expect(state.kind).toBe("file");
+  });
+
+  it("EditorRoomState.manifestEntries è una MapSchema vuota all'inizializzazione", () => {
+    const roomState = new EditorRoomState();
+    expect(roomState.manifestEntries.size).toBe(0);
+  });
+
+  it("set/get/delete su manifestEntries funzionano per il percorso dell'entry", () => {
+    const roomState = new EditorRoomState();
+    const key = manifestEntryPath("Assets", "model.glb");
+    roomState.manifestEntries.set(key, toManifestEntryState("Assets", "model.glb", "file"));
+    expect(roomState.manifestEntries.has(key)).toBe(true);
+    expect(roomState.manifestEntries.get(key)?.kind).toBe("file");
+    roomState.manifestEntries.delete(key);
+    expect(roomState.manifestEntries.has(key)).toBe(false);
   });
 });
 
