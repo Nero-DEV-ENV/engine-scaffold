@@ -163,3 +163,22 @@ export async function fetchProjectFile(relativePath: string): Promise<ProjectFil
     return null;
   }
 }
+
+/**
+ * Fase 10F — scrive `contents` (testo) in `relativePath` dentro la project
+ * root corrente via `POST /project/file` (nuova route lato host-agent, vedi
+ * `packages/host-agent/src/httpServer.ts`), simmetrica a `fetchProjectFile`
+ * sopra. `false` se l'agente non è raggiungibile, se non c'è una root
+ * aperta, o se la scrittura fallisce lato host-agent — stesso trattamento
+ * "silenzioso" delle altre funzioni di questo modulo, il chiamante
+ * (`actions/sceneActions.ts`) decide come mostrarlo.
+ */
+export async function writeProjectFile(relativePath: string, contents: string): Promise<boolean> {
+  try {
+    const url = `${httpBaseUrl()}/project/file?path=${encodeURIComponent(relativePath)}`;
+    const response = await fetch(url, { method: "POST", body: contents });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}

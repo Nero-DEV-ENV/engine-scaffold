@@ -264,6 +264,30 @@ async function handleHttp(
     return;
   }
 
+  if (req.method === "POST" && url.startsWith("/project/file")) {
+    // Fase 10F — scrive un file testuale dentro la project root corrente
+    // (v1: solo il file scena a percorso fisso, vedi
+    // `packages/editor/src/actions/sceneActions.ts`). Simmetrica alla GET
+    // sopra: percorso in query string, ma qui il BODY della richiesta è il
+    // contenuto grezzo da scrivere (testo UTF-8) invece di JSON — stesso
+    // motivo per cui la GET risponde con byte grezzi e non JSON, evitare un
+    // giro inutile di incapsulamento per un payload che è già testo.
+    const parsed = new URL(url, "http://localhost");
+    const relativePath = parsed.searchParams.get("path");
+    if (relativePath === null || relativePath.length === 0) {
+      sendJson(res, 400, { error: "Parametro 'path' mancante." });
+      return;
+    }
+    const contents = await readRequestBody(req);
+    const written = await projectFolder.writeFile(relativePath, contents);
+    if (!written) {
+      sendJson(res, 400, { error: "Nessuna project root aperta, percorso non valido, o scrittura fallita." });
+      return;
+    }
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
   sendJson(res, 404, { error: "Non trovato." });
 }
 

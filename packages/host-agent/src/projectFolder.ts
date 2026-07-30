@@ -231,6 +231,44 @@ export class ProjectFolderSession {
   }
 
   /**
+   * Fase 10F — scrive `contents` (testo UTF-8, il JSON di `SceneData` nel
+   * caso d'uso attuale) in `relativePath` dentro la project root corrente,
+   * sovrascrivendo un file già esistente. Stessa guardia anti-traversal di
+   * `readFile`/`listDirectory` (`resolveWithinRoot`). `false` se: nessuna
+   * root è aperta, `relativePath` esce dalla root, il percorso risultante è
+   * già una cartella (scrivere un file sopra una cartella non è un intent
+   * valido — stesso trattamento "richiesta ignorata" già usato altrove), o
+   * la scrittura fallisce per un motivo di filesystem (permessi, disco
+   * pieno). Nessuna creazione di cartelle intermedie: a differenza di
+   * `persistState()` (stato interno di host-agent, può vivere ovunque sotto
+   * `.host-agent-state/`), qui il percorso è dentro la project folder
+   * dell'utente — la Fase 10F v1 usa solo un percorso fisso alla radice
+   * (`scene.json`), che esiste già in quanto la radice stessa è aperta;
+   * creare sottocartelle mancanti in una fase futura che permettesse un
+   * percorso scelto dall'utente è una decisione a parte, non presa qui.
+   */
+  async writeFile(relativePath: string, contents: string): Promise<boolean> {
+    if (this.rootPath === null) return false;
+    const target = resolveWithinRoot(this.rootPath, relativePath);
+    if (target === null) return false;
+
+    try {
+      const stats = await fsp.stat(target);
+      if (stats.isDirectory()) return false;
+    } catch {
+      // Il file non esiste ancora: va bene, è una creazione, non una
+      // sovrascrittura — nessun errore da questo stat().
+    }
+
+    try {
+      await fsp.writeFile(target, contents, "utf8");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Elenca il contenuto di `relativePath` (relativo alla root corrente,
    * `"."` per la root stessa) — cartelle prima dei file, poi ordine
    * alfabetico; le voci in `DEFAULT_IGNORED_NAMES` sono filtrate. `null`

@@ -175,6 +175,52 @@ describe("ProjectFolderSession", () => {
       await expect(session.readFile("Assets")).resolves.toBeNull();
     });
   });
+
+  describe("writeFile (Fase 10F)", () => {
+    it("restituisce false se nessuna root è aperta", async () => {
+      const session = new ProjectFolderSession();
+      await expect(session.writeFile("scene.json", "{}")).resolves.toBe(false);
+    });
+
+    it("scrive un nuovo file dentro la root e lo si può rileggere", async () => {
+      const session = new ProjectFolderSession();
+      session.openRoot(fixtureRoot);
+      const ok = await session.writeFile("nuova-scena.json", '{"version":1,"roots":[]}');
+      expect(ok).toBe(true);
+      const written = readFileSync(path.join(fixtureRoot, "nuova-scena.json"), "utf8");
+      expect(written).toBe('{"version":1,"roots":[]}');
+    });
+
+    it("sovrascrive un file già esistente", async () => {
+      const session = new ProjectFolderSession();
+      session.openRoot(fixtureRoot);
+      const ok = await session.writeFile("scene.json", '{"version":1,"roots":[]}');
+      expect(ok).toBe(true);
+      const written = readFileSync(path.join(fixtureRoot, "scene.json"), "utf8");
+      expect(written).toBe('{"version":1,"roots":[]}');
+    });
+
+    it("scrive in una sottocartella già esistente", async () => {
+      const session = new ProjectFolderSession();
+      session.openRoot(fixtureRoot);
+      const ok = await session.writeFile("Assets/nuovo.json", "{}");
+      expect(ok).toBe(true);
+      const written = readFileSync(path.join(fixtureRoot, "Assets", "nuovo.json"), "utf8");
+      expect(written).toBe("{}");
+    });
+
+    it("restituisce false per un tentativo di path traversal", async () => {
+      const session = new ProjectFolderSession();
+      session.openRoot(fixtureRoot);
+      await expect(session.writeFile("../../fuori.json", "{}")).resolves.toBe(false);
+    });
+
+    it("restituisce false se il percorso risultante è già una cartella", async () => {
+      const session = new ProjectFolderSession();
+      session.openRoot(fixtureRoot);
+      await expect(session.writeFile("Assets", "{}")).resolves.toBe(false);
+    });
+  });
 });
 
 describe("ProjectFolderSession — persistenza dello stato (Fase 10D)", () => {

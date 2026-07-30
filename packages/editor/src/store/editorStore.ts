@@ -120,6 +120,18 @@ export type SaveLoadStatus =
 export const saveLoadStatusStore = createExternalStore<SaveLoadStatus>({ kind: "idle" });
 
 /**
+ * Fase 10F — stato dell'ultima azione Salva/Carica su DISCO (dentro la
+ * project folder), separato da `saveLoadStatusStore` sopra (IndexedDB):
+ * punto 1 confermato dall'utente, le due azioni sono parallele e
+ * indipendenti, non un'unica azione condivisa — un salvataggio su disco non
+ * deve sovrascrivere/confondersi col messaggio dell'ultimo salvataggio
+ * IndexedDB mostrato in Topbar.tsx, e viceversa. Stessa shape (`SaveLoadStatus`,
+ * riusato) perché il significato dei 5 stati è identico, solo il
+ * meccanismo di persistenza sottostante cambia.
+ */
+export const diskSaveLoadStatusStore = createExternalStore<SaveLoadStatus>({ kind: "idle" });
+
+/**
  * Fase 8B — tool attivo nel Viewport, stile barra strumenti di Unity
  * (Q/W/E/R): `"move"`/`"rotate"`/`"scale"` corrispondono 1:1 alle modalità
  * `"translate"/"rotate"/"scale"` di `TransformControls` (createEditorScene.ts
