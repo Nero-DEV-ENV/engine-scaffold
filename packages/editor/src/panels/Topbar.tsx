@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { editorSceneHandleStore, saveLoadStatusStore } from "../store/editorStore.js";
-import { saveCurrentScene, loadPersistedSceneIntoEditor } from "../actions/sceneActions.js";
+import { editorSceneHandleStore, saveLoadStatusStore, diskSaveLoadStatusStore } from "../store/editorStore.js";
+import { saveSceneToDisk, loadSceneFromDiskIntoEditor } from "../actions/sceneActions.js";
 import { connectionStore, connect, disconnect, presenceStore, mySessionIdStore } from "../network/collabClient.js";
 import { agentStateStore, ensureAgentMonitoring } from "../network/hostAgentClient.js";
+import { projectRootStore } from "../network/projectFolderClient.js";
 import { TunnelDialog, type TunnelDialogVariant } from "./TunnelDialog.js";
 import { SaveIcon, LoadIcon } from "../icons.js";
 
@@ -60,10 +61,29 @@ import { SaveIcon, LoadIcon } from "../icons.js";
  * verso host-agent) resta disabilitato finché `agentStateStore` non è
  * "running" (decisione utente, Fase 6F.3.b DECISIONE 13 — il controllo è
  * responsabilità della UI, non del backend).
+ *
+ * Fase 10F aggiunge due bottoni Salva/Carica SU DISCO (project folder
+ * aperta, `scene.json` a percorso fisso) — icone riusate (`SaveIcon`/
+ * `LoadIcon`), stato dedicato `diskSaveLoadStatusStore`. Disabilitati
+ * finché `projectRootStore` (network/projectFolderClient.ts) non riflette
+ * una project folder aperta, oltre alla stessa condizione `ready`/`busy`
+ * di prima (qui `diskReady`/`diskBusy`).
+ *
+ * Precisazione successiva dell'utente: i bottoni Save/Load IndexedDB sono
+ * stati rimossi da QUESTA UI (rimangono gli unici visibili i due sopra),
+ * ma il meccanismo IndexedDB stesso resta invariato e funzionante sotto —
+ * Ctrl+S/Ctrl+O (`shortcuts/globalShortcuts.ts`) continuano a chiamare
+ * `saveCurrentScene`/`loadPersistedSceneIntoEditor`, quindi
+ * `saveLoadStatusStore` resta letto qui SOLO per mostrare il messaggio di
+ * stato di quell'azione da tastiera (nessun bottone associato in questo
+ * componente) — un salvataggio via scorciatoia senza alcun riscontro
+ * visibile sarebbe altrimenti silenzioso.
  */
 export function Topbar(): JSX.Element {
   const handle = editorSceneHandleStore.useValue();
   const status = saveLoadStatusStore.useValue();
+  const diskStatus = diskSaveLoadStatusStore.useValue();
+  const projectRoot = projectRootStore.useValue();
   const connection = connectionStore.useValue();
   const presence = presenceStore.useValue();
   const mySessionId = mySessionIdStore.useValue();
@@ -81,7 +101,8 @@ export function Topbar(): JSX.Element {
   }, []);
 
   const ready = handle !== null;
-  const busy = status.kind === "busy";
+  const diskBusy = diskStatus.kind === "busy";
+  const diskReady = ready && projectRoot !== null;
   const connecting = connection.status === "connecting";
   const nameInputDisabled = connecting || connection.status === "connected";
   const modeDisabled = nameInputDisabled;
@@ -107,20 +128,20 @@ export function Topbar(): JSX.Element {
         <button
           type="button"
           className="icon-button"
-          disabled={!ready || busy}
-          onClick={() => void saveCurrentScene()}
-          aria-label="Save"
-          title="Save"
+          disabled={!diskReady || diskBusy}
+          onClick={() => void saveSceneToDisk()}
+          aria-label="Salva su disco"
+          title={diskReady ? "Salva su disco (project folder)" : "Richiede una project folder aperta"}
         >
           <SaveIcon />
         </button>
         <button
           type="button"
           className="icon-button"
-          disabled={!ready || busy}
-          onClick={() => void loadPersistedSceneIntoEditor()}
-          aria-label="Load"
-          title="Load"
+          disabled={!diskReady || diskBusy}
+          onClick={() => void loadSceneFromDiskIntoEditor()}
+          aria-label="Carica da disco"
+          title={diskReady ? "Carica da disco (project folder)" : "Richiede una project folder aperta"}
         >
           <LoadIcon />
         </button>
@@ -191,6 +212,14 @@ export function Topbar(): JSX.Element {
           role={status.kind === "error" ? "alert" : "status"}
         >
           {status.kind === "empty" ? "Nessuna scena salvata." : status.message}
+        </span>
+      )}
+      {(diskStatus.kind === "success" || diskStatus.kind === "empty" || diskStatus.kind === "error") && (
+        <span
+          className={diskStatus.kind === "error" ? "topbar-status topbar-status-error" : "topbar-status"}
+          role={diskStatus.kind === "error" ? "alert" : "status"}
+        >
+          {diskStatus.kind === "empty" ? "Nessun file scene.json nella project folder." : diskStatus.message}
         </span>
       )}
       {dialogVariant !== null && (
