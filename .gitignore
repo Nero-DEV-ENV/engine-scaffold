@@ -6,3 +6,4 @@ dist/
 .env
 .env.local
 coverage/
+packages/host-agent/.host-agent-state/

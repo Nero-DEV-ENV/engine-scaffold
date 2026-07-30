@@ -77,6 +77,15 @@ export function ProjectTree(): JSX.Element {
   useEffect(() => {
     dispatch({ type: "reset" });
     if (rootPath !== null) {
+      // Fase 10D — se il campo è ancora vuoto, `rootPath` non nullo qui
+      // significa che l'host-agent aveva già una root (riaperta da sé
+      // all'avvio del processo, vedi projectFolder.ts `restore()`, o
+      // rimasta viva da prima di questo mount): senza questo, il campo
+      // testo resterebbe vuoto pur con l'albero già popolato sotto.
+      // Forma funzionale per non dover aggiungere `pathInput` alle
+      // dipendenze dell'effect (che deve restare legato solo a `rootPath`,
+      // vedi commento sotto).
+      setPathInput((current) => (current.length === 0 ? rootPath : current));
       void loadDirectory(PROJECT_TREE_ROOT_PATH);
     }
     // Solo `rootPath` deve far ripartire il caricamento: `dispatch` è

@@ -1,4 +1,4 @@
-import { promises as fsp, statSync } from "node:fs";
+import { promises as fsp, statSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
 /**
@@ -65,6 +65,21 @@ export interface ProjectFolderState {
 
 export type OpenRootResult = { ok: true } | { ok: false; error: string };
 
+export interface ProjectFolderSessionOptions {
+  /**
+   * Fase 10D — percorso assoluto del file JSON usato per persistere
+   * `rootPath` fra riavvii del PROCESSO host-agent (vedi `restore()`).
+   * Se omesso (default), nessuna persistenza: la sessione si comporta
+   * esattamente come nelle fasi precedenti, solo in memoria — questo
+   * mantiene invariati tutti i test già esistenti che istanziano
+   * `new ProjectFolderSession()` senza argomenti. Iniettato dal chiamante
+   * (`index.ts`, con `PROJECT_FOLDER_STATE_PATH` da `paths.ts`) invece di
+   * calcolato qui dentro, per restare testabile su fixture reali
+   * (`mkdtempSync`) senza mai toccare il vero percorso di produzione.
+   */
+  statePath?: string;
+}
+
 /**
  * Risolve `relativePath` contro `root` e restituisce il percorso assoluto
  * risultante SOLO se resta dentro `root` (root stesso incluso) — altrimenti
@@ -81,6 +96,11 @@ export function resolveWithinRoot(root: string, relativePath: string): string | 
 
 export class ProjectFolderSession {
   private rootPath: string | null = null;
+  private readonly statePath: string | null;
+
+  constructor(options: ProjectFolderSessionOptions = {}) {
+    this.statePath = options.statePath ?? null;
+  }
 
   /**
    * Apre `absolutePath` come nuova project root, sostituendo quella
@@ -104,6 +124,7 @@ export class ProjectFolderSession {
       return { ok: false, error: "Il percorso non è una cartella." };
     }
     this.rootPath = path.resolve(absolutePath);
+    this.persistState();
     return { ok: true };
   }
 
@@ -111,11 +132,71 @@ export class ProjectFolderSession {
   closeRoot(): boolean {
     if (this.rootPath === null) return false;
     this.rootPath = null;
+    this.persistState();
     return true;
   }
 
   getState(): ProjectFolderState {
     return { rootPath: this.rootPath };
+  }
+
+  /**
+   * Fase 10D — rilegge, se presente, l'ultima root nota da `statePath` e
+   * prova a riaprirla SUBITO E SILENZIOSAMENTE (nessuna azione utente
+   * richiesta) — pensata per essere chiamata UNA VOLTA da `index.ts`
+   * all'avvio del processo, prima di accettare richieste HTTP. Fallisce
+   * silenziosamente (la sessione resta con `rootPath: null`, nessuna
+   * eccezione propagata) se: `statePath` non è configurato (nessuna
+   * persistenza, vedi costruttore), il file non esiste ancora (primo
+   * avvio in assoluto), il suo contenuto non è JSON valido o non ha la
+   * shape attesa, oppure il percorso salvato non esiste più su disco
+   * (cartella spostata/rimossa/USB scollegata) — stesso trattamento
+   * "richiesta ignorata" già usato altrove (es. `readFile` su un percorso
+   * invalido, Fase 10C). Riusa `openRoot()` per la validazione invece di
+   * duplicarla, quindi ripersiste anche lo stesso stato appena letto
+   * (idempotente, innocuo).
+   */
+  restore(): void {
+    if (this.statePath === null) return;
+    let raw: string;
+    try {
+      raw = readFileSync(this.statePath, "utf8");
+    } catch {
+      return;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (typeof parsed !== "object" || parsed === null) return;
+    const savedRootPath = (parsed as { rootPath?: unknown }).rootPath;
+    if (typeof savedRootPath !== "string") return;
+    this.openRoot(savedRootPath);
+  }
+
+  /**
+   * Scrive lo stato corrente su `statePath` (no-op se non configurato) —
+   * chiamata SINCRONAMENTE da `openRoot()`/`closeRoot()` subito dopo aver
+   * cambiato `rootPath`, quindi completata prima che quei metodi tornino
+   * al chiamante HTTP che li ha innescati (punto confermato per Fase
+   * 10D): un crash improvviso del processo (kill -9, crash di sistema)
+   * non deve poter perdere l'ultima root nota, quindi non ci si può
+   * affidare a un handler di chiusura pulita tipo `process.on('exit',
+   * ...)`, inaffidabile in quei casi. Fallisce silenziosamente se la
+   * scrittura non riesce (es. permessi, disco pieno): lo stato in memoria
+   * di questa sessione resta comunque coerente, solo la persistenza fra
+   * riavvii ne risentirebbe.
+   */
+  private persistState(): void {
+    if (this.statePath === null) return;
+    try {
+      mkdirSync(path.dirname(this.statePath), { recursive: true });
+      writeFileSync(this.statePath, JSON.stringify({ rootPath: this.rootPath }), "utf8");
+    } catch {
+      // Vedi commento sopra: fallimento silenzioso, per design.
+    }
   }
 
   /**

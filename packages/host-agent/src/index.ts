@@ -2,7 +2,13 @@ import { ProcessSupervisor } from "./processSupervisor.js";
 import { TunnelHostSession } from "./tunnelHostSession.js";
 import { ProjectFolderSession } from "./projectFolder.js";
 import { createHostAgentServer } from "./httpServer.js";
-import { SERVER_PACKAGE_DIR, SERVER_TSCONFIG_PATH, SERVER_DIST_ENTRY_PATH, resolveTscScriptPath } from "./paths.js";
+import {
+  SERVER_PACKAGE_DIR,
+  SERVER_TSCONFIG_PATH,
+  SERVER_DIST_ENTRY_PATH,
+  resolveTscScriptPath,
+  PROJECT_FOLDER_STATE_PATH,
+} from "./paths.js";
 
 /**
  * Entry point — Fase 6F.3.a (ProcessSupervisor) + Fase 6F.3.b
@@ -30,7 +36,18 @@ const supervisor = new ProcessSupervisor({
 });
 
 const tunnelHost = new TunnelHostSession({ colyseusHttpUrl });
-const projectFolder = new ProjectFolderSession();
+const projectFolder = new ProjectFolderSession({ statePath: PROJECT_FOLDER_STATE_PATH });
+
+// Fase 10D — riapertura silenziosa dell'ultima project folder nota, PRIMA
+// di accettare richieste HTTP (vedi projectFolder.ts, restore()). Se il
+// percorso non esiste più (cartella spostata/rimossa/USB scollegata),
+// restore() fallisce silenziosamente e rootPath resta null: nessuna
+// azione bloccante, l'agente parte comunque.
+projectFolder.restore();
+const restoredRoot = projectFolder.getState().rootPath;
+if (restoredRoot !== null) {
+  console.log(`[host-agent] project folder root ripristinata da sessione precedente: ${restoredRoot}`);
+}
 
 const server = createHostAgentServer(supervisor, tunnelHost, projectFolder);
 server.listen(port, () => {

@@ -38,3 +38,17 @@ export const SERVER_DIST_ENTRY_PATH = path.join(SERVER_PACKAGE_DIR, "dist", "ind
 export function resolveTscScriptPath(): string {
   return requireFromHere.resolve("typescript/bin/tsc");
 }
+
+/**
+ * Fase 10D — cartella dedicata allo stato persistito di host-agent fra
+ * riavvii del processo. Deliberatamente FUORI da `dist/` (artefatto di
+ * build rigenerabile/cancellabile da `pnpm build`, semanticamente sbagliato
+ * per dati che devono sopravvivere a una build), un livello sopra:
+ * packages/host-agent/dist/paths.js -> ../.host-agent-state. Esplicitamente
+ * esclusa da git (vedi voce dedicata nel `.gitignore` root, non esisteva
+ * un `.gitignore` di pacchetto prima di questa fase).
+ */
+export const HOST_AGENT_STATE_DIR = path.resolve(moduleDir, "../.host-agent-state");
+
+/** Fase 10D — persiste `rootPath` di `ProjectFolderSession` fra riavvii del processo host-agent (vedi `projectFolder.ts`, `restore()`/`persistState()`). */
+export const PROJECT_FOLDER_STATE_PATH = path.join(HOST_AGENT_STATE_DIR, "project-folder-state.json");
