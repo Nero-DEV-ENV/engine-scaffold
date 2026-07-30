@@ -6,6 +6,7 @@ import {
   joinProjectPath,
   breadcrumbSegments,
   parentProjectPath,
+  changedPathsToReload,
   projectTreeReducer,
   type ProjectTreeState,
 } from "./projectTreeState.js";
@@ -153,5 +154,30 @@ describe("parentProjectPath", () => {
 
   it("risale di un livello da una cartella a due livelli fino al primo", () => {
     expect(parentProjectPath("Assets/Models")).toBe("Assets");
+  });
+});
+
+describe("changedPathsToReload (Fase 10G)", () => {
+  it("include la root se segnalata come cambiata, anche con nessun nodo espanso", () => {
+    expect(changedPathsToReload([PROJECT_TREE_ROOT_PATH], new Set())).toEqual([PROJECT_TREE_ROOT_PATH]);
+  });
+
+  it("esclude un percorso cambiato ma mai espanso (mai un livello mai guardato)", () => {
+    expect(changedPathsToReload(["Assets"], new Set())).toEqual([]);
+  });
+
+  it("include un percorso cambiato che è già stato espanso", () => {
+    expect(changedPathsToReload(["Assets"], new Set(["Assets"]))).toEqual(["Assets"]);
+  });
+
+  it("filtra un mix di percorsi tracciati e non tracciati, preservando l'ordine", () => {
+    expect(changedPathsToReload([PROJECT_TREE_ROOT_PATH, "Assets", "Assets/Textures"], new Set(["Assets"]))).toEqual([
+      PROJECT_TREE_ROOT_PATH,
+      "Assets",
+    ]);
+  });
+
+  it("restituisce un array vuoto se non c'è nulla da ricaricare", () => {
+    expect(changedPathsToReload([], new Set(["Assets"]))).toEqual([]);
   });
 });

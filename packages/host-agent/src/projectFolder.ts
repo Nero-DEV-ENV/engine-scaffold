@@ -1,5 +1,7 @@
 import { promises as fsp, statSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
+import { EventEmitter } from "node:events";
+import { watch, type FSWatcher } from "chokidar";
 
 /**
  * projectFolder.ts — Fase 10A. Spike per validare l'approccio scelto per il
@@ -36,11 +38,10 @@ import path from "node:path";
  * relativo malformato o malevolo non deve MAI poter uscire dalla cartella
  * scelta dall'utente come root.
  *
- * Nessun EventEmitter/canale WS qui (a differenza di ProcessSupervisor/
- * TunnelHostSession): nessun consumer richiede ancora push in tempo reale
- * in questa fase. Da rivalutare se una fase futura (es. 10G, watch
- * automatico) introduce cambiamenti che la UI deve riflettere senza un
- * ri-fetch esplicito.
+ * Fase 10G — la sessione ora estende `EventEmitter` (evento "changed",
+ * vedi `restartWatching()` più sotto): un consumer real-time esiste
+ * finalmente (canale WS dedicato `/project/watch` in httpServer.ts), a
+ * differenza di quando questo file è stato scritto in Fase 10A.
  */
 
 /** Cartelle escluse di default dalla scansione — Fase 10A, precisazione esplicita dell'utente ("non importare cartelle node di default"). Confrontate per nome esatto, non per pattern. */
@@ -78,7 +79,23 @@ export interface ProjectFolderSessionOptions {
    * (`mkdtempSync`) senza mai toccare il vero percorso di produzione.
    */
   statePath?: string;
+  /**
+   * Fase 10G — finestra di debounce (ms) usata da `startWatching()` per
+   * raggruppare raffiche di eventi filesystem ravvicinati (es. un `git
+   * pull` che tocca decine di file in pochi millisecondi) in un'unica
+   * emissione `"changed"`. Default 300ms. Iniettabile per gli stessi
+   * motivi di `statePath`: i test di questo file usano un valore piccolo
+   * per restare veloci, senza toccare la costante di produzione.
+   */
+  watchDebounceMs?: number;
 }
+
+/** Fase 10G — payload dell'evento `"changed"`: percorsi RELATIVI alla root (stile POSIX, "." per la root stessa, coerente con `PROJECT_TREE_ROOT_PATH` lato editor) delle cartelle il cui contenuto è cambiato. Deduplicati e raggruppati per finestra di debounce — vedi `queueChangedPath()`. */
+export interface ProjectChangeEvent {
+  changedPaths: string[];
+}
+
+const DEFAULT_WATCH_DEBOUNCE_MS = 300;
 
 /**
  * Risolve `relativePath` contro `root` e restituisce il percorso assoluto
@@ -94,12 +111,21 @@ export function resolveWithinRoot(root: string, relativePath: string): string | 
   return target;
 }
 
-export class ProjectFolderSession {
+export class ProjectFolderSession extends EventEmitter {
   private rootPath: string | null = null;
   private readonly statePath: string | null;
+  private readonly watchDebounceMs: number;
+
+  /** Fase 10G — `null` se nessuna root è aperta (o se il watch è stato appena fermato). Un solo watcher alla volta, coerente col vincolo "una sola root aperta" già valido per l'intera sessione. */
+  private watcher: FSWatcher | null = null;
+  /** Fase 10G — cartelle (percorsi relativi POSIX) toccate da un evento filesystem ancora da "flushare" come evento `"changed"` — vedi `queueChangedPath()`/`flushChangedPaths()`. */
+  private readonly pendingChangedPaths = new Set<string>();
+  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: ProjectFolderSessionOptions = {}) {
+    super();
     this.statePath = options.statePath ?? null;
+    this.watchDebounceMs = options.watchDebounceMs ?? DEFAULT_WATCH_DEBOUNCE_MS;
   }
 
   /**
@@ -125,6 +151,7 @@ export class ProjectFolderSession {
     }
     this.rootPath = path.resolve(absolutePath);
     this.persistState();
+    this.restartWatching();
     return { ok: true };
   }
 
@@ -133,11 +160,106 @@ export class ProjectFolderSession {
     if (this.rootPath === null) return false;
     this.rootPath = null;
     this.persistState();
+    this.stopWatching();
     return true;
   }
 
   getState(): ProjectFolderState {
     return { rootPath: this.rootPath };
+  }
+
+  /**
+   * Fase 10G — ferma un watcher eventualmente già attivo (root sostituita
+   * o chiusa) e ne avvia uno nuovo sulla root corrente, se presente.
+   * Chiamato da `openRoot()` (mai più di un watcher alla volta, stesso
+   * vincolo "una sola root" già valido per il resto della sessione) e
+   * indirettamente da `restore()` (che riusa `openRoot()`).
+   */
+  private restartWatching(): void {
+    this.stopWatching();
+    if (this.rootPath === null) return;
+    const root = this.rootPath;
+
+    // `persistent: false`: non deve essere QUESTO watcher a tenere vivo il
+    // processo — in produzione ci pensa già il server HTTP (`server.listen()`
+    // in httpServer.ts/index.ts). Scelta deliberata anche per i test: molti
+    // test esistenti in questo file aprono una root senza mai chiamarla
+    // (`closeRoot()`) esplicitamente; con `persistent: true` (default di
+    // chokidar) ognuno di quei watcher lascerebbe un handle aperto che
+    // impedirebbe a Vitest di terminare pulito a fine file.
+    //
+    // `ignoreInitial: true`: la scansione iniziale di chokidar non deve
+    // generare un'ondata di eventi "add"/"addDir" per l'intero albero già
+    // esistente al momento dell'apertura — solo i cambiamenti SUCCESSIVI
+    // interessano questa fase (vedi obiettivo dichiarato).
+    //
+    // `ignored`: stessa esclusione già applicata a `listDirectory()`
+    // (`DEFAULT_IGNORED_NAMES`, confrontata sul nome base) — qui però
+    // chokidar la usa anche per NON scendere affatto dentro quelle
+    // cartelle durante la scansione/il watch, non solo per filtrare
+    // l'output a posteriori.
+    this.watcher = watch(root, {
+      persistent: false,
+      ignoreInitial: true,
+      ignored: (watchedPath: string) => DEFAULT_IGNORED_NAMES.has(path.basename(watchedPath)),
+    });
+
+    const onEntryEvent = (absolutePath: string): void => this.queueChangedPath(root, absolutePath);
+    // Solo add/unlink/addDir/unlinkDir: un "change" (contenuto di un file
+    // modificato, es. scene.json riscritto da un altro strumento) non
+    // altera l'elenco di una cartella — nessuna entry aggiunta/rimossa —
+    // quindi non serve invalidare/ripubblicare nulla per Fase 10E/10B.
+    // Punto confermato dall'utente: nessuna gestione speciale per
+    // scene.json cambiato dall'esterno in questa fase (Fase 10F resta
+    // così com'è).
+    this.watcher.on("add", onEntryEvent);
+    this.watcher.on("unlink", onEntryEvent);
+    this.watcher.on("addDir", onEntryEvent);
+    this.watcher.on("unlinkDir", onEntryEvent);
+  }
+
+  /** Fase 10G — ferma il watcher corrente (se presente) e scarta qualunque cambiamento ancora in attesa di essere "flushato" — un cambiamento nella root appena chiusa non deve generare una notifica tardiva dopo la chiusura. */
+  private stopWatching(): void {
+    if (this.watcher !== null) {
+      const activeWatcher = this.watcher;
+      this.watcher = null;
+      void activeWatcher.close();
+    }
+    if (this.debounceTimer !== null) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = null;
+    }
+    this.pendingChangedPaths.clear();
+  }
+
+  /**
+   * Fase 10G — converte `absolutePath` (separatori nativi del SO, es.
+   * backslash su Windows) nel percorso RELATIVO stile POSIX della
+   * cartella che lo contiene, e lo accoda per la prossima emissione
+   * `"changed"`. `path.posix.dirname(...)` calcola sempre il genitore
+   * corretto sia che `absolutePath` sia un file sia una cartella: in
+   * entrambi i casi è la cartella GENITORE a dover essere ricaricata
+   * (un file/cartella in più o in meno cambia l'elenco del genitore, non
+   * il proprio); `""` (la root stessa cambiata, es. `addDir` sulla root
+   * durante uno scenario limite) è normalizzato a `"."`, coerente con
+   * `PROJECT_TREE_ROOT_PATH` lato editor.
+   */
+  private queueChangedPath(root: string, absolutePath: string): void {
+    const relative = path.relative(root, absolutePath).split(path.sep).join("/");
+    const affectedDir = relative === "" ? "." : path.posix.dirname(relative);
+    this.pendingChangedPaths.add(affectedDir);
+
+    if (this.debounceTimer !== null) clearTimeout(this.debounceTimer);
+    this.debounceTimer = setTimeout(() => this.flushChangedPaths(), this.watchDebounceMs);
+  }
+
+  /** Fase 10G — emette un solo evento `"changed"` con TUTTE le cartelle accodate dall'ultimo flush (deduplicate dal `Set`), poi svuota la coda. Non-op se non c'è nulla in coda (es. il timer scatta dopo che `stopWatching()` ha già svuotato tutto). */
+  private flushChangedPaths(): void {
+    this.debounceTimer = null;
+    if (this.pendingChangedPaths.size === 0) return;
+    const changedPaths = [...this.pendingChangedPaths];
+    this.pendingChangedPaths.clear();
+    this.emit("changed", { changedPaths } satisfies ProjectChangeEvent);
   }
 
   /**

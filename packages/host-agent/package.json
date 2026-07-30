@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@engine/tunnel": "workspace:*",
+    "chokidar": "^4.0.3",
     "ws": "^8.21.1"
   },
   "devDependencies": {
