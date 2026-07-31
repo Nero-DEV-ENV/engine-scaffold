@@ -19,8 +19,8 @@ export { OrbitCameraController } from "./rendering/CameraController.js";
 export { createBasicLighting } from "./rendering/Lighting.js";
 export type { BasicLighting, BasicLightingOptions } from "./rendering/Lighting.js";
 
-export { loadGLTF, attachGLTF } from "./rendering/AssetLoader.js";
-export type { LoadedModel } from "./rendering/AssetLoader.js";
+export { loadGLTF, attachGLTF, setTextureResolver } from "./rendering/AssetLoader.js";
+export type { LoadedModel, TextureResolver } from "./rendering/AssetLoader.js";
 
 export { MeshRenderer, DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "./rendering/MeshRenderer.js";
 export type { MeshShape } from "./rendering/MeshRenderer.js";

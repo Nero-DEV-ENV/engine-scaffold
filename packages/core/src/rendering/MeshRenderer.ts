@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { Component } from "../core/Component.js";
+import { requestTexture, releaseTexture, getMissingTexture } from "./AssetLoader.js";
 
 /**
  * MeshShape — forma di una primitiva renderizzabile da `MeshRenderer`, come
@@ -63,6 +64,30 @@ export class MeshRenderer extends Component {
   private _roughness: number = DEFAULT_ROUGHNESS;
   private _mesh: THREE.Mesh | null = null;
 
+  /** Percorso relativo (project folder) della mappa Albedo assegnata, o `undefined` = nessuna (Fase 11B.1). Vedi getter/setter `albedoMap` sotto. */
+  private _albedoMap: string | undefined = undefined;
+  /**
+   * Percorso per cui questa istanza detiene ATTUALMENTE un riferimento
+   * refcounted in `AssetLoader.requestTexture` (può differire brevemente da
+   * `_albedoMap` mentre un caricamento precedente è ancora in volo — vedi
+   * `_applyAlbedoMap`). `_disposeMesh`/`onDestroy` rilasciano ESATTAMENTE
+   * questo percorso, mai `_albedoMap` direttamente, per non rilasciare un
+   * riferimento mai acquisito o saltarne uno acquisito per un valore ormai
+   * superato.
+   */
+  private _retainedAlbedoPath: string | undefined = undefined;
+  /**
+   * Incrementato ad ogni assegnazione di `albedoMap`: la Promise di
+   * `requestTexture` in volo cattura il valore corrente e, alla risoluzione,
+   * applica la texture SOLO se il token non è cambiato nel frattempo (cioè
+   * nessuna assegnazione più recente ha già soppiantato questa) — altrimenti
+   * rilascia subito il riferimento appena ottenuto invece di applicarlo o di
+   * lasciarlo trapelare. Stesso principio di un "richiesta in volo stantia"
+   * già gestito altrove nel progetto per operazioni asincrone concorrenti su
+   * uno stesso stato mutabile.
+   */
+  private _albedoMapToken = 0;
+
   /** Forma corrente. Assegnarla ricostruisce geometria e mesh immediatamente (dispose della vecchia geometria incluso). */
   get shape(): MeshShape {
     return this._shape;
@@ -109,6 +134,90 @@ export class MeshRenderer extends Component {
     }
   }
 
+  /**
+   * Mappa Albedo corrente (Fase 11B.1): percorso RELATIVO alla project
+   * folder (es. "Textures/wood_albedo.png"), o `undefined` = nessuna
+   * texture assegnata (materiale a colore piatto, comportamento identico a
+   * prima di questa fase — stessa retrocompatibilità già seguita per
+   * metalness/roughness in Fase 11). A differenza di color/metalness/
+   * roughness (sincroni), il caricamento è ASINCRONO — vedi
+   * `_applyAlbedoMap` sotto per la gestione di race/dispose/fallback.
+   */
+  get albedoMap(): string | undefined {
+    return this._albedoMap;
+  }
+
+  set albedoMap(value: string | undefined) {
+    this._albedoMap = value;
+    this._applyAlbedoMap();
+  }
+
+  /**
+   * _applyAlbedoMap — rilascia il riferimento texture precedentemente
+   * detenuto (se presente), poi:
+   * - `_albedoMap` undefined → materiale torna a colore piatto (`map =
+   *   null`), nessun nuovo riferimento da acquisire.
+   * - altrimenti richiede la texture via `AssetLoader.requestTexture`:
+   *   `null` (nessun TextureResolver registrato, vedi AssetLoader.ts) →
+   *   applica subito `MISSING_TEXTURE`, nessun riferimento da tracciare
+   *   (non è mai stata acquisita). Una Promise → applica `MISSING_TEXTURE`
+   *   nel frattempo (stato "caricamento in corso" per il Viewport, punto
+   *   aperto 5 confermato), poi sostituisce con la texture reale alla
+   *   risoluzione SOLO se `_albedoMapToken` non è cambiato (nessuna
+   *   assegnazione più recente ha già soppiantato questa) — altrimenti
+   *   rilascia subito il riferimento appena ottenuto, mai applicato.
+   */
+  private _applyAlbedoMap(): void {
+    if (this._retainedAlbedoPath !== undefined) {
+      releaseTexture(this._retainedAlbedoPath);
+      this._retainedAlbedoPath = undefined;
+    }
+    const token = ++this._albedoMapToken;
+    const material = this._mesh?.material as THREE.MeshStandardMaterial | undefined;
+    if (!material) return;
+
+    const path = this._albedoMap;
+    if (path === undefined) {
+      material.map = null;
+      material.needsUpdate = true;
+      return;
+    }
+
+    const pending = requestTexture(path);
+    if (!pending) {
+      material.map = getMissingTexture();
+      material.needsUpdate = true;
+      return;
+    }
+    this._retainedAlbedoPath = path;
+    material.map = getMissingTexture();
+    material.needsUpdate = true;
+    pending
+      .then((texture) => {
+        // Se una assegnazione più recente ha già soppiantato questa (token
+        // cambiato), il rilascio del riferimento acquisito da QUESTA
+        // chiamata è già avvenuto SINCRONAMENTE all'inizio di quella
+        // chiamata successiva (rilascio di `_retainedAlbedoPath` in cima a
+        // `_applyAlbedoMap`) — qui va solo evitato di applicare una
+        // texture ormai stantia al materiale, MAI un secondo rilascio
+        // (rilascerebbe due volte lo stesso riferimento).
+        if (token !== this._albedoMapToken) return;
+        const currentMaterial = this._mesh?.material as THREE.MeshStandardMaterial | undefined;
+        if (currentMaterial) {
+          currentMaterial.map = texture;
+          currentMaterial.needsUpdate = true;
+        }
+      })
+      .catch(() => {
+        if (token !== this._albedoMapToken) return;
+        const currentMaterial = this._mesh?.material as THREE.MeshStandardMaterial | undefined;
+        if (currentMaterial) {
+          currentMaterial.map = getMissingTexture();
+          currentMaterial.needsUpdate = true;
+        }
+      });
+  }
+
   override awake(): void {
     this._rebuild();
   }
@@ -137,6 +246,16 @@ export class MeshRenderer extends Component {
     }
     this._mesh = mesh;
     this.gameObject._object3D.add(mesh);
+    // Fase 11B.1 — il materiale appena creato sopra non ha ancora alcuna
+    // mappa Albedo: se una era già assegnata prima di questo rebuild (es.
+    // cambio di `shape`), va ri-richiesta/riapplicata al nuovo materiale.
+    // `_disposeMesh()` sopra (chiamata da questo stesso `_rebuild()`) ha
+    // già rilasciato il riferimento precedente — questa chiamata ne
+    // acquisisce uno fresco (cache hit istantaneo se ancora in cache,
+    // nessun ricaricamento di rete duplicato).
+    if (this._albedoMap !== undefined) {
+      this._applyAlbedoMap();
+    }
   }
 
   private _disposeMesh(): void {
@@ -145,6 +264,14 @@ export class MeshRenderer extends Component {
     this._mesh.geometry.dispose();
     (this._mesh.material as THREE.Material).dispose();
     this._mesh = null;
+    // Fase 11B.1 — rilascia il riferimento alla texture Albedo trattenuto
+    // da questa istanza (se presente): mai lasciare un riferimento
+    // refcounted vivo dopo che il materiale che lo usava è stato disposto,
+    // stesso principio già seguito per geometria/materiale sopra.
+    if (this._retainedAlbedoPath !== undefined) {
+      releaseTexture(this._retainedAlbedoPath);
+      this._retainedAlbedoPath = undefined;
+    }
   }
 
   override onDestroy(): void {

@@ -66,6 +66,17 @@ export interface MeshRendererData {
    */
   metalness?: number;
   roughness?: number;
+  /**
+   * Fase 11B.1 — percorso RELATIVO alla project folder della mappa Albedo
+   * assegnata (es. "Textures/wood_albedo.png"), MAI byte (stesso principio
+   * già seguito per il manifest della project folder, Fase 10E): ogni
+   * client risolve i byte dal proprio host-agent locale (vedi
+   * `TextureResolver` in rendering/AssetLoader.ts). Assente = nessuna
+   * texture assegnata (materiale a colore piatto) — stessa semantica
+   * "opzionale solo in lettura, scritto sempre se presente" di
+   * metalness/roughness sopra, `version` di SceneData resta `1`.
+   */
+  albedoMap?: string;
 }
 
 /**

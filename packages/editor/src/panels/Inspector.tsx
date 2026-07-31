@@ -10,7 +10,9 @@ import { radToDeg, degToRad, roundForDisplay, parseNumericInput } from "./transf
 import { Component, serializeComponent, RigidBodyType, DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "@engine/core";
 import type { ComponentData, ComponentTypeName, GameObject } from "@engine/core";
 import type { EditorSceneHandle } from "../scene/createEditorScene.js";
-import { PlusIcon, RemoveIcon } from "../icons.js";
+import { PlusIcon, RemoveIcon, TextureIcon } from "../icons.js";
+import { projectFileUrl } from "../network/projectFolderClient.js";
+import { armedTextureSlotStore, armAlbedoMapSlot, disarmTextureSlot } from "../scene/textureAssignment.js";
 
 /**
  * Fase 6D — un componente per l'Inspector: opzioni del menu "Aggiungi
@@ -100,6 +102,87 @@ function RangeField({
 }
 
 /**
+ * AlbedoMapField — Fase 11B.1, controllo Inspector per la mappa Albedo di
+ * un MeshRenderer. A differenza degli altri campi di questa fase, non è un
+ * `<input>` diretto: l'assegnazione avviene con un doppio click su una
+ * texture in ProjectTree.tsx/ProjectFolderGrid.tsx (punto aperto 1
+ * confermato dall'utente), qui c'è solo il bottone che "arma" lo slot
+ * (`armAlbedoMapSlot`, textureAssignment.ts) e la thumbnail del risultato.
+ *
+ * Thumbnail: `<img src={projectFileUrl(...)}>` diretto (CORS permissivo
+ * confermato lato host-agent), non un `THREE.Texture`/canvas — riusa il
+ * caricamento nativo del browser (stato di caricamento/errore già gestito
+ * dal browser stesso, `onError` sotto copre solo il caso "percorso non
+ * risolvibile" per mostrare il placeholder testuale). Lo stato di
+ * caricamento/fallback della texture REALE nel Viewport (materiale
+ * 3D) è gestito interamente in MeshRenderer._applyAlbedoMap (core), non
+ * qui: le due "anteprime" (thumbnail 2D in Inspector, materiale 3D nel
+ * Viewport) sono percorsi di rendering indipendenti, con lo stesso
+ * concetto di fallback ma implementazioni proprie.
+ */
+function AlbedoMapField({
+  gameObjectId,
+  value,
+  onCommit,
+}: {
+  gameObjectId: string;
+  value: string | undefined;
+  onCommit: (next: string | undefined) => void;
+}): JSX.Element {
+  const armedSlot = armedTextureSlotStore.useValue();
+  const isArmed = armedSlot?.gameObjectId === gameObjectId && armedSlot.field === "albedoMap";
+  const [thumbBroken, setThumbBroken] = useState(false);
+  // Un `value` diverso (nuova assegnazione, o rimozione) merita un nuovo
+  // tentativo di caricamento della thumbnail: senza questo reset, una
+  // texture precedente rotta lascerebbe `thumbBroken` bloccato a `true`
+  // anche dopo un'assegnazione successiva valida.
+  useEffect(() => {
+    setThumbBroken(false);
+  }, [value]);
+
+  return (
+    <div className="inspector-texture-field">
+      <span className="inspector-field-label">Albedo</span>
+      <div className="inspector-texture-thumb-wrap">
+        {value !== undefined && !thumbBroken ? (
+          <img
+            src={projectFileUrl(value)}
+            alt=""
+            className="inspector-texture-thumb"
+            onError={() => setThumbBroken(true)}
+          />
+        ) : (
+          <span
+            className={`inspector-texture-thumb-empty${value !== undefined && thumbBroken ? " inspector-texture-thumb-missing" : ""}`}
+            title={value !== undefined && thumbBroken ? "Texture mancante" : undefined}
+          >
+            <TextureIcon />
+          </span>
+        )}
+      </div>
+      <button
+        type="button"
+        className={`inspector-texture-choose-button${isArmed ? " inspector-texture-choose-button-armed" : ""}`}
+        onClick={() => armAlbedoMapSlot(gameObjectId)}
+      >
+        {isArmed ? "In attesa di doppio click…" : "Scegli texture…"}
+      </button>
+      {value !== undefined && (
+        <button
+          type="button"
+          className="inspector-delete-button"
+          onClick={() => onCommit(undefined)}
+          aria-label="Rimuovi mappa Albedo"
+          title="Rimuovi"
+        >
+          <RemoveIcon />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
  * Inspector — proprietà Transform del GameObject selezionato (Fase 4C).
  *
  * Legge `selectionStore` (Fase 4B, come Hierarchy.tsx) e in più
@@ -150,6 +233,21 @@ export function Inspector(): JSX.Element {
   const selected = selectionStore.useValue();
   const handle = editorSceneHandleStore.useValue();
   transformVersionStore.useValue();
+
+  // Fase 11B.1 — uno slot texture armato (bottone "Scegli texture..." su
+  // un MeshRenderer) perde di senso se la selezione cambia via da quel
+  // GameObject (un doppio click successivo su una texture non deve
+  // assegnarla a un oggetto che l'utente non sta più guardando in
+  // Inspector). `resolveTextureAssignment` (textureAssignment.ts) già
+  // rifiuta un'assegnazione la cui selezione non combacia più, ma disarmare
+  // subito qui evita anche solo di mostrare un bottone "In attesa…" non più
+  // valido dopo un cambio di selezione.
+  useEffect(() => {
+    const armed = armedTextureSlotStore.get();
+    if (armed && armed.gameObjectId !== selected?.id) {
+      disarmTextureSlot();
+    }
+  }, [selected]);
 
   if (!selected) {
     return (
@@ -436,7 +534,7 @@ function ComponentRow({
           <RemoveIcon />
         </button>
       </div>
-      <ComponentFields data={componentData} onCommit={commit} />
+      <ComponentFields data={componentData} onCommit={commit} gameObjectId={gameObject.id} />
     </div>
   );
 }
@@ -453,9 +551,35 @@ const RIGID_BODY_TYPE_OPTIONS: ReadonlyArray<{ value: RigidBodyType; label: stri
  * lettura (decisione confermata con l'utente, vedi JSDoc di Inspector
  * sopra) invece di un secondo switch esaustivo dentro la UI.
  */
-function ComponentFields({ data, onCommit }: { data: ComponentData; onCommit: (next: ComponentData) => void }): JSX.Element {
+function ComponentFields({
+  data,
+  onCommit,
+  gameObjectId,
+}: {
+  data: ComponentData;
+  onCommit: (next: ComponentData) => void;
+  gameObjectId: string;
+}): JSX.Element {
   switch (data.type) {
-    case "MeshRenderer":
+    case "MeshRenderer": {
+      // Cattura `data` (già narrowed a MeshRendererData dallo switch) in una
+      // const separata: stesso motivo di `componentData` in ComponentRow
+      // sopra — TypeScript non propaga il narrowing di una variabile
+      // esterna dentro una function annidata come `commitAlbedoMap` sotto.
+      const meshRendererData = data;
+      // Fase 11B.1 — rimozione (next === undefined) deve OMETTERE la
+      // chiave `albedoMap`, non assegnarla esplicitamente a `undefined`:
+      // stesso vincolo di `exactOptionalPropertyTypes: true` già gestito in
+      // SceneSerializer.ts (serializeComponent) per lo stesso campo.
+      function commitAlbedoMap(next: string | undefined): void {
+        if (next === undefined) {
+          const withoutAlbedoMap = { ...meshRendererData };
+          delete withoutAlbedoMap.albedoMap;
+          onCommit(withoutAlbedoMap);
+        } else {
+          onCommit({ ...meshRendererData, albedoMap: next });
+        }
+      }
       return (
         <>
           <p className="inspector-component-readonly">Shape: {data.shape.kind}</p>
@@ -486,8 +610,10 @@ function ComponentFields({ data, onCommit }: { data: ComponentData; onCommit: (n
             value={data.roughness ?? DEFAULT_ROUGHNESS}
             onCommit={(next) => onCommit({ ...data, roughness: next })}
           />
+          <AlbedoMapField gameObjectId={gameObjectId} value={data.albedoMap} onCommit={commitAlbedoMap} />
         </>
       );
+    }
     case "Light":
       return (
         <>

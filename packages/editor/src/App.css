@@ -878,6 +878,84 @@ body {
   text-align: right;
 }
 
+/* Fase 11B.1 — controllo Albedo dell'Inspector: stesso linguaggio visivo di
+   .inspector-range-field sopra (contenitore a riga intera, non
+   .inspector-field: il bottone "Scegli texture…" ha bisogno della
+   larghezza disponibile, stesso motivo già documentato per il range). */
+.inspector-texture-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-field);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  margin-bottom: 6px;
+}
+
+.inspector-texture-thumb-wrap {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-input);
+  overflow: hidden;
+  background: var(--bg-surface);
+}
+
+.inspector-texture-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.inspector-texture-thumb-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-disabled);
+}
+
+/* Percorso assegnato ma non risolvibile (file rinominato/cancellato fuori
+   dall'editor, o project folder non aperta) — stesso rosso di
+   --status-danger già usato per il bottone "Rimuovi" (.inspector-delete-button),
+   non un terzo colore di stato. */
+.inspector-texture-thumb-missing {
+  color: var(--status-danger);
+}
+
+.inspector-texture-choose-button {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 5px 8px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspector-texture-choose-button:hover {
+  color: var(--text-bright);
+  border-color: var(--text-muted);
+}
+
+/* Slot armato, in attesa di doppio click su una texture in Assets — stesso
+   --bg-accent-muted già usato per la riga selezionata dell'albero Project
+   (project-tree-row-selected), per un unico linguaggio di "in attesa di
+   un'azione dell'utente" nel progetto. */
+.inspector-texture-choose-button-armed {
+  background: var(--bg-accent-muted);
+  color: var(--text-bright);
+  border-color: var(--accent);
+}
+
 .inspector-select-field {
   padding: 0 0 0 6px;
 }

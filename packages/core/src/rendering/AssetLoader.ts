@@ -97,3 +97,140 @@ function deriveNameFromUrl(url: string): string {
   const fileName = url.split("/").pop() ?? url;
   return fileName.replace(/\.(gltf|glb)$/i, "") || "Model";
 }
+
+// ---- Fase 11B.1 — mappe texture (Albedo) per MeshRenderer ---------------
+
+/**
+ * TextureResolver — `packages/core` non ha alcuna conoscenza della project
+ * folder/host-agent (stesso confine architetturale già motivato in
+ * `hostAgentClient.ts`/`projectFolderClient.ts` lato editor: @engine/core è
+ * il runtime del motore, non il protocollo di rete verso l'agente locale).
+ * Un `MeshRendererData.albedoMap` è però un percorso RELATIVO alla project
+ * folder (vedi types.ts) — serve quindi un punto d'iniezione con cui
+ * chiunque ospiti il motore (oggi solo `packages/editor`) traduce quel
+ * percorso in una URL effettivamente caricabile da `THREE.TextureLoader`.
+ * `packages/editor/src/network/projectFolderClient.ts` registra questo
+ * resolver una sola volta al caricamento del modulo (vedi lì). Se nessun
+ * resolver è registrato (es. `packages/cli`/playground senza host-agent),
+ * `requestTexture` sotto restituisce `null` e il chiamante applica
+ * `MISSING_TEXTURE` — comportamento comunque corretto, non un errore.
+ */
+export type TextureResolver = (relativePath: string) => string;
+
+let textureResolver: TextureResolver | null = null;
+
+/** Registra (o rimuove, passando `null`) il resolver percorso-relativo→URL. */
+export function setTextureResolver(resolver: TextureResolver | null): void {
+  textureResolver = resolver;
+}
+
+/**
+ * MISSING_TEXTURE — placeholder "texture mancante" (scacchiera magenta/nero
+ * 4×4, convenzione comune nei motori 3D per un riferimento texture rotto).
+ * `THREE.DataTexture` costruita da un TypedArray, non da `<canvas>`/`Image`:
+ * i test di questo package girano in Node puro (Vitest, nessun DOM — vedi
+ * Physics.test.ts), un Canvas reale non sarebbe disponibile lì. Costruita
+ * pigramente (non a livello di modulo) e mai disposta: è un singolo asset
+ * condiviso e statico per tutta la vita del processo, non legato al ciclo
+ * di vita di alcun `MeshRenderer` (a differenza delle texture reali sotto,
+ * refcounted e disposte in `releaseTexture`).
+ */
+let missingTexture: THREE.DataTexture | null = null;
+
+export function getMissingTexture(): THREE.DataTexture {
+  if (missingTexture) return missingTexture;
+  const size = 4;
+  const data = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = (y * size + x) * 4;
+      const isMagenta = (x + y) % 2 === 0;
+      data[i] = isMagenta ? 255 : 0;
+      data[i + 1] = 0;
+      data[i + 2] = isMagenta ? 255 : 0;
+      data[i + 3] = 255;
+    }
+  }
+  const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  texture.magFilter = THREE.NearestFilter;
+  texture.needsUpdate = true;
+  missingTexture = texture;
+  return missingTexture;
+}
+
+/** Loader condiviso per le texture Albedo, stesso motivo di `sharedLoader` (GLTF) sopra. */
+let sharedTextureLoader: THREE.TextureLoader | null = null;
+
+function getSharedTextureLoader(): THREE.TextureLoader {
+  if (!sharedTextureLoader) {
+    sharedTextureLoader = new THREE.TextureLoader();
+  }
+  return sharedTextureLoader;
+}
+
+/**
+ * Cache condivisa per percorso relativo, con reference counting: più
+ * `MeshRenderer` che assegnano la stessa texture (stesso percorso)
+ * condividono la stessa istanza `THREE.Texture` invece di ricaricarla e
+ * decodificarla una volta per materiale — `dispose()` reale solo quando
+ * l'ultimo riferimento viene rilasciato (`releaseTexture` sotto). Tenere la
+ * cache per Promise (non solo per Texture risolta) evita richieste
+ * duplicate se due `MeshRenderer` assegnano lo stesso percorso nella
+ * stessa finestra di caricamento.
+ */
+const textureCache = new Map<string, { promise: Promise<THREE.Texture>; refCount: number }>();
+
+/**
+ * requestTexture — richiede la `THREE.Texture` per `relativePath` (Albedo),
+ * incrementando il refcount della entry di cache. Restituisce `null` se
+ * nessun `TextureResolver` è registrato (chiamante applica
+ * `MISSING_TEXTURE` sincronamente, nessun errore). La Promise restituita
+ * può rigettare (percorso non risolvibile lato host-agent, rete non
+ * raggiungibile, formato immagine non decodificabile) — il chiamante
+ * (MeshRenderer._applyAlbedoMap) cattura l'errore e applica
+ * `MISSING_TEXTURE`. Ogni chiamata che restituisce una Promise (risolta o
+ * no) DEVE essere bilanciata da una `releaseTexture(relativePath)`
+ * quando quel riferimento non serve più — stesso principio di
+ * retain/release, non un semplice cache "usa e getta".
+ */
+export function requestTexture(relativePath: string): Promise<THREE.Texture> | null {
+  if (!textureResolver) return null;
+  const cached = textureCache.get(relativePath);
+  if (cached) {
+    cached.refCount++;
+    return cached.promise;
+  }
+  const url = textureResolver(relativePath);
+  const promise = new Promise<THREE.Texture>((resolve, reject) => {
+    getSharedTextureLoader().load(
+      url,
+      (texture) => resolve(texture),
+      undefined,
+      (error) => reject(new Error(`requestTexture: impossibile caricare "${relativePath}": ${String(error)}`))
+    );
+  });
+  textureCache.set(relativePath, { promise, refCount: 1 });
+  return promise;
+}
+
+/**
+ * releaseTexture — rilascia un riferimento precedentemente ottenuto da
+ * `requestTexture` per lo stesso `relativePath`. Al refcount zero, dispone
+ * la `THREE.Texture` reale (se la Promise si era risolta: se era ancora in
+ * volo o rigettata, non c'è nulla da disporre, la entry viene solo
+ * rimossa dalla cache) e rimuove la entry — nessun leak per texture non
+ * più referenziate da alcun `MeshRenderer`.
+ */
+export function releaseTexture(relativePath: string): void {
+  const cached = textureCache.get(relativePath);
+  if (!cached) return;
+  cached.refCount--;
+  if (cached.refCount > 0) return;
+  textureCache.delete(relativePath);
+  cached.promise.then(
+    (texture) => texture.dispose(),
+    () => {
+      // Promise rigettata: nessuna THREE.Texture reale da disporre.
+    }
+  );
+}
