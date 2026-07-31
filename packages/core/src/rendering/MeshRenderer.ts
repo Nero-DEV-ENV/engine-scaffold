@@ -21,6 +21,23 @@ export type MeshShape =
 
 const DEFAULT_SHAPE: MeshShape = { kind: "box", size: { x: 1, y: 1, z: 1 } };
 const DEFAULT_COLOR = 0xffffff;
+/**
+ * Fase 11 — default di metalness/roughness allineati ESATTAMENTE ai default
+ * nativi di `THREE.MeshStandardMaterial` (roughness 1.0, metalness 0.0,
+ * verificati sul sorgente three.js): prima di questi due campi, `_rebuild()`
+ * costruiva già il materiale senza specificarli, quindi il comportamento
+ * visivo era già questo — una scena salvata prima di Fase 11 (priva di
+ * questi due campi nel JSON, vedi il fallback in SceneSerializer.ts) risulta
+ * quindi visivamente identica a prima. Esportate (a differenza di
+ * DEFAULT_SHAPE/DEFAULT_COLOR sopra) perché servono anche fuori da questo
+ * file: SceneSerializer.ts le riusa come fallback di retrocompatibilità,
+ * Inspector.tsx le riusa per il valore iniziale del bottone "Aggiungi
+ * componente" — stessa unica-fonte-di-verità già seguita per non duplicare
+ * `MeshShape`/`RigidBodyType` fra runtime e formato dati (vedi commento in
+ * serialization/types.ts).
+ */
+export const DEFAULT_METALNESS = 0;
+export const DEFAULT_ROUGHNESS = 1;
 
 /**
  * MeshRenderer — Component che possiede una Mesh primitiva (box/sfera/piano)
@@ -42,6 +59,8 @@ const DEFAULT_COLOR = 0xffffff;
 export class MeshRenderer extends Component {
   private _shape: MeshShape = DEFAULT_SHAPE;
   private _color: number = DEFAULT_COLOR;
+  private _metalness: number = DEFAULT_METALNESS;
+  private _roughness: number = DEFAULT_ROUGHNESS;
   private _mesh: THREE.Mesh | null = null;
 
   /** Forma corrente. Assegnarla ricostruisce geometria e mesh immediatamente (dispose della vecchia geometria incluso). */
@@ -66,6 +85,30 @@ export class MeshRenderer extends Component {
     }
   }
 
+  /** Metalness corrente (0-1, metallic/roughness workflow di MeshStandardMaterial). Assegnarla aggiorna il materiale esistente senza ricreare la geometria — stesso pattern di `color`. */
+  get metalness(): number {
+    return this._metalness;
+  }
+
+  set metalness(value: number) {
+    this._metalness = value;
+    if (this._mesh) {
+      (this._mesh.material as THREE.MeshStandardMaterial).metalness = value;
+    }
+  }
+
+  /** Roughness corrente (0-1). Stesso pattern di `metalness` sopra. */
+  get roughness(): number {
+    return this._roughness;
+  }
+
+  set roughness(value: number) {
+    this._roughness = value;
+    if (this._mesh) {
+      (this._mesh.material as THREE.MeshStandardMaterial).roughness = value;
+    }
+  }
+
   override awake(): void {
     this._rebuild();
   }
@@ -83,7 +126,11 @@ export class MeshRenderer extends Component {
   private _rebuild(): void {
     this._disposeMesh();
     const geometry = geometryForShape(this._shape);
-    const material = new THREE.MeshStandardMaterial({ color: this._color });
+    const material = new THREE.MeshStandardMaterial({
+      color: this._color,
+      metalness: this._metalness,
+      roughness: this._roughness,
+    });
     const mesh = new THREE.Mesh(geometry, material);
     if (this._shape.kind === "plane") {
       mesh.rotation.x = -Math.PI / 2;

@@ -615,7 +615,15 @@ describe("EditorRoom", () => {
         kind: "box",
         name: "Cube",
         transform: sampleTransform(),
-        components: [{ type: "MeshRenderer", shape: { kind: "box", size: { x: 1, y: 1, z: 1 } }, color: 0xffffff }],
+        components: [
+          {
+            type: "MeshRenderer",
+            shape: { kind: "box", size: { x: 1, y: 1, z: 1 } },
+            color: 0xffffff,
+            metalness: 0,
+            roughness: 1,
+          },
+        ],
       });
       await waitFor(() => room.state.components.has("go-1:MeshRenderer"));
 
@@ -625,6 +633,8 @@ describe("EditorRoom", () => {
         type: "MeshRenderer",
         shape: { kind: "box", size: { x: 1, y: 1, z: 1 } },
         color: 0xffffff,
+        metalness: 0,
+        roughness: 1,
       });
     });
 

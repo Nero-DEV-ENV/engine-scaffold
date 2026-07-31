@@ -111,6 +111,49 @@ describe("SceneSerializer", () => {
     expect(restoredPlane!.getComponent(MeshRenderer)!.shape).toEqual({ kind: "plane", width: 5, height: 8 });
   });
 
+  it("round-trip: MeshRenderer metalness/roughness (Fase 11)", () => {
+    const go = new GameObject("Sfera metallica");
+    const renderer = go.addComponent(MeshRenderer);
+    renderer.metalness = 0.8;
+    renderer.roughness = 0.2;
+
+    const data = throughJSON(serializeScene([go]));
+    expect(data.roots[0]!.components[0]).toMatchObject({ metalness: 0.8, roughness: 0.2 });
+
+    const [restored] = deserializeScene(data);
+    const restoredRenderer = restored!.getComponent(MeshRenderer);
+    expect(restoredRenderer!.metalness).toBe(0.8);
+    expect(restoredRenderer!.roughness).toBe(0.2);
+  });
+
+  it("deserializeScene applica i default del motore (metalness 0, roughness 1) a un MeshRenderer serializzato PRIMA di Fase 11 (Fase 11)", () => {
+    const legacyData: SceneData = {
+      version: 1,
+      roots: [
+        {
+          id: "11111111-1111-1111-1111-111111111111",
+          name: "Cubo vecchio",
+          active: true,
+          transform: {
+            position: { x: 0, y: 0, z: 0 },
+            rotation: { x: 0, y: 0, z: 0, w: 1 },
+            scale: { x: 1, y: 1, z: 1 },
+          },
+          // Nessun metalness/roughness: forma esatta di un MeshRenderer
+          // serializzato prima di Fase 11 (vedi JSDoc di MeshRendererData
+          // in types.ts).
+          components: [{ type: "MeshRenderer", shape: { kind: "box", size: { x: 1, y: 1, z: 1 } }, color: 0xffffff } as ComponentData],
+          children: [],
+        },
+      ],
+    };
+
+    const [restored] = deserializeScene(legacyData);
+    const restoredRenderer = restored!.getComponent(MeshRenderer);
+    expect(restoredRenderer!.metalness).toBe(0);
+    expect(restoredRenderer!.roughness).toBe(1);
+  });
+
   it("round-trip: Light ambient (color + intensity)", () => {
     const go = new GameObject("AmbientLight");
     const light = go.addComponent(Light);
@@ -277,6 +320,22 @@ describe("SceneSerializer", () => {
       expect(renderer.shape).toEqual({ kind: "sphere", radius: 2 });
       expect(renderer.color).toBe(0x123456);
       expect(go.getComponent(MeshRenderer)).toBe(renderer); // stessa istanza, non ricreata
+    });
+
+    it("aggiorna metalness/roughness di un MeshRenderer esistente (Fase 11)", () => {
+      const go = new GameObject("Cubo");
+      const renderer = go.addComponent(MeshRenderer);
+
+      updateComponentData(renderer, {
+        type: "MeshRenderer",
+        shape: { kind: "box", size: { x: 1, y: 1, z: 1 } },
+        color: 0xffffff,
+        metalness: 0.6,
+        roughness: 0.3,
+      });
+
+      expect(renderer.metalness).toBe(0.6);
+      expect(renderer.roughness).toBe(0.3);
     });
 
     it("aggiorna i campi di un Light esistente", () => {

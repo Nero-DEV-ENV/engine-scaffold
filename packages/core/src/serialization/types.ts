@@ -52,6 +52,20 @@ export interface MeshRendererData {
   type: "MeshRenderer";
   shape: MeshShape;
   color: number;
+  /**
+   * Fase 11 — metalness/roughness (0-1, metallic/roughness workflow).
+   * Opzionali (a differenza di `shape`/`color`, sempre presenti fin dalla
+   * Fase 5): una scena salvata PRIMA di Fase 11 non li ha nel JSON su disco,
+   * e `deserializeScene`/`applyComponentData` non fanno validazione a runtime
+   * di questo formato (vedi SceneSerializer.ts) — quindi il campo può
+   * arrivare `undefined` anche se qui il tipo lo dichiara `number`. Un
+   * MeshRenderer appena serializzato li scrive SEMPRE (stesso trattamento di
+   * `color`): l'opzionalità è solo per leggere dati vecchi, non per ometterli
+   * quando si scrive. Stesso principio già seguito per `sourceAssetId?` in
+   * `GameObjectData` sotto.
+   */
+  metalness?: number;
+  roughness?: number;
 }
 
 /**

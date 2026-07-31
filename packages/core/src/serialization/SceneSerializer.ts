@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { GameObject, Destroy } from "../core/GameObject.js";
 import type { Component } from "../core/Component.js";
-import { MeshRenderer } from "../rendering/MeshRenderer.js";
+import { MeshRenderer, DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "../rendering/MeshRenderer.js";
 import { Light } from "../rendering/Light.js";
 import { RigidBody } from "../physics/RigidBody.js";
 import { BoxCollider, SphereCollider } from "../physics/Collider.js";
@@ -41,7 +41,13 @@ export function serializeTransform(go: GameObject): TransformData {
  */
 export function serializeComponent(component: Component): ComponentData | null {
   if (component instanceof MeshRenderer) {
-    return { type: "MeshRenderer", shape: component.shape, color: component.color };
+    return {
+      type: "MeshRenderer",
+      shape: component.shape,
+      color: component.color,
+      metalness: component.metalness,
+      roughness: component.roughness,
+    };
   }
   if (component instanceof Light) {
     return {
@@ -145,6 +151,12 @@ export function applyComponentData(go: GameObject, data: ComponentData): void {
       const renderer = go.addComponent(MeshRenderer);
       renderer.shape = data.shape;
       renderer.color = data.color;
+      // Fase 11 — fallback ai default del motore se il dato viene da una
+      // scena salvata PRIMA di Fase 11 (campo assente, vedi JSDoc di
+      // MeshRendererData in types.ts): `??`, non `||`, per non trattare uno
+      // 0 esplicito (metalness minima) come "assente".
+      renderer.metalness = data.metalness ?? DEFAULT_METALNESS;
+      renderer.roughness = data.roughness ?? DEFAULT_ROUGHNESS;
       return;
     }
     case "Light": {
@@ -207,6 +219,9 @@ export function updateComponentData(component: Component, data: ComponentData): 
       }
       component.shape = data.shape;
       component.color = data.color;
+      // Fase 11 — stesso fallback di retrocompatibilità di applyComponentData sopra.
+      component.metalness = data.metalness ?? DEFAULT_METALNESS;
+      component.roughness = data.roughness ?? DEFAULT_ROUGHNESS;
       return;
     }
     case "Light": {
