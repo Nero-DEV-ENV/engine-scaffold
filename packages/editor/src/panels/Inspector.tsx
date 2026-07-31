@@ -7,7 +7,7 @@ import {
   editorSceneHandleStore,
 } from "../store/editorStore.js";
 import { radToDeg, degToRad, roundForDisplay, parseNumericInput } from "./transformFields.js";
-import { Component, serializeComponent, RigidBodyType } from "@engine/core";
+import { Component, serializeComponent, RigidBodyType, DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "@engine/core";
 import type { ComponentData, ComponentTypeName, GameObject } from "@engine/core";
 import type { EditorSceneHandle } from "../scene/createEditorScene.js";
 import { PlusIcon, RemoveIcon } from "../icons.js";
@@ -33,7 +33,13 @@ const COMPONENT_OPTIONS: ReadonlyArray<{ type: ComponentTypeName; label: string 
 function defaultComponentData(type: ComponentTypeName): ComponentData {
   switch (type) {
     case "MeshRenderer":
-      return { type: "MeshRenderer", shape: { kind: "box", size: { x: 1, y: 1, z: 1 } }, color: 0xffffff };
+      return {
+        type: "MeshRenderer",
+        shape: { kind: "box", size: { x: 1, y: 1, z: 1 } },
+        color: 0xffffff,
+        metalness: DEFAULT_METALNESS,
+        roughness: DEFAULT_ROUGHNESS,
+      };
     case "Light":
       return { type: "Light", lightKind: { kind: "ambient" }, color: 0xffffff, intensity: 1 };
     case "RigidBody":
@@ -52,6 +58,45 @@ function colorNumberToHex(color: number): string {
 
 function hexToColorNumber(hex: string): number {
   return parseInt(hex.slice(1), 16);
+}
+
+/**
+ * RangeField — Fase 11: slider 0-1 per proprietà PBR (metalness/roughness),
+ * primo controllo Inspector di questo tipo (finora solo NumberField per
+ * valori liberi e `<input type="color">` per i colori). A differenza di
+ * NumberField non serve interpretare stati intermedi di digitazione
+ * (`parseNumericInput`/`null`): `<input type="range">` restituisce sempre
+ * una stringa numerica valida nel range configurato (il browser stesso la
+ * clampa fra min/max), quindi `Number(event.target.value)` è sempre un
+ * numero valido. Il valore corrente è mostrato accanto come solo testo
+ * (`roundForDisplay`, stesso arrotondamento di NumberField) — non un
+ * secondo input editabile, per non introdurre due controlli da tenere
+ * sincronizzati per lo stesso valore.
+ */
+function RangeField({
+  label,
+  value,
+  onCommit,
+}: {
+  label: string;
+  value: number;
+  onCommit: (next: number) => void;
+}): JSX.Element {
+  return (
+    <label className="inspector-range-field">
+      <span className="inspector-field-label">{label}</span>
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.01}
+        value={value}
+        onChange={(event) => onCommit(Number(event.target.value))}
+        className="inspector-range-input"
+      />
+      <span className="inspector-range-value">{roundForDisplay(value, 2)}</span>
+    </label>
+  );
 }
 
 /**
@@ -423,6 +468,24 @@ function ComponentFields({ data, onCommit }: { data: ComponentData; onCommit: (n
               className="inspector-color-input"
             />
           </label>
+          {/* Fase 11 — data.metalness/roughness sono opzionali nel tipo
+              (retrocompatibilità scene pre-Fase-11, vedi JSDoc di
+              MeshRendererData in types.ts): qui in pratica non sono MAI
+              undefined a runtime, perché `data` arriva da serializeComponent
+              su un'istanza live di MeshRenderer, i cui campi hanno sempre un
+              valore numerico reale (il fallback ai default è già stato
+              applicato da applyComponentData al caricamento) — il `??` serve
+              solo a soddisfare il tipo. */}
+          <RangeField
+            label="Metalness"
+            value={data.metalness ?? DEFAULT_METALNESS}
+            onCommit={(next) => onCommit({ ...data, metalness: next })}
+          />
+          <RangeField
+            label="Roughness"
+            value={data.roughness ?? DEFAULT_ROUGHNESS}
+            onCommit={(next) => onCommit({ ...data, roughness: next })}
+          />
         </>
       );
     case "Light":

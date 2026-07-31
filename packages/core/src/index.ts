@@ -22,7 +22,7 @@ export type { BasicLighting, BasicLightingOptions } from "./rendering/Lighting.j
 export { loadGLTF, attachGLTF } from "./rendering/AssetLoader.js";
 export type { LoadedModel } from "./rendering/AssetLoader.js";
 
-export { MeshRenderer } from "./rendering/MeshRenderer.js";
+export { MeshRenderer, DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "./rendering/MeshRenderer.js";
 export type { MeshShape } from "./rendering/MeshRenderer.js";
 
 export { Light } from "./rendering/Light.js";

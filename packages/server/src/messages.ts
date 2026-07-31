@@ -255,7 +255,17 @@ export function isComponentData(value: unknown): value is ComponentData {
   if (!isComponentTypeName(type)) return false;
   switch (type) {
     case "MeshRenderer":
-      return isMeshShapeData(v.shape) && isFiniteNumber(v.color);
+      // Fase 11 — metalness/roughness sono opzionali in MeshRendererData
+      // (retrocompatibilità con scene salvate prima di Fase 11, vedi
+      // JSDoc in types.ts): validati SE presenti, ma la loro assenza non
+      // invalida il messaggio, stesso principio strutturale già seguito
+      // sopra per `v.components === undefined` in isAddGameObjectMessage.
+      return (
+        isMeshShapeData(v.shape) &&
+        isFiniteNumber(v.color) &&
+        (v.metalness === undefined || isFiniteNumber(v.metalness)) &&
+        (v.roughness === undefined || isFiniteNumber(v.roughness))
+      );
     case "Light":
       return isLightKindData(v.lightKind) && isFiniteNumber(v.color) && isFiniteNumber(v.intensity);
     case "RigidBody":

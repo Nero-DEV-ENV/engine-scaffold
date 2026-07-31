@@ -847,6 +847,37 @@ body {
   cursor: pointer;
 }
 
+/* Fase 11 — slider 0-1 per proprietà PBR (metalness/roughness). Contenitore
+   a sé, non .inspector-field: un range ha bisogno di occupare la larghezza
+   disponibile per essere utilizzabile, mentre .inspector-field è pensato
+   per un singolo input centrato (NumberField/SelectField) — un terzo
+   elemento (il readout del valore) non ci entrerebbe in modo pulito con
+   `justify-content: center`. --radius-sm, non --radius-input: non è una
+   text box editabile (convenzione Fase 9), e accent-color sulla palette
+   grigi (--accent) — niente blu, riservato al grafo nodi di Fase 16. */
+.inspector-range-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-field);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+}
+
+.inspector-range-input {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.inspector-range-value {
+  min-width: 28px;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: right;
+}
+
 .inspector-select-field {
   padding: 0 0 0 6px;
 }
