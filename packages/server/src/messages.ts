@@ -260,11 +260,17 @@ export function isComponentData(value: unknown): value is ComponentData {
       // JSDoc in types.ts): validati SE presenti, ma la loro assenza non
       // invalida il messaggio, stesso principio strutturale già seguito
       // sopra per `v.components === undefined` in isAddGameObjectMessage.
+      // Fase 11B.1 — stesso principio per `albedoMap` (percorso relativo,
+      // stringa): punto scoperto in ispezione per questa fase, non nel
+      // documento originale, stesso schema già emerso in Fase 11 per
+      // metalness/roughness (estendere `types.ts` non basta, questo
+      // validator strutturale lato server va aggiornato di pari passo).
       return (
         isMeshShapeData(v.shape) &&
         isFiniteNumber(v.color) &&
         (v.metalness === undefined || isFiniteNumber(v.metalness)) &&
-        (v.roughness === undefined || isFiniteNumber(v.roughness))
+        (v.roughness === undefined || isFiniteNumber(v.roughness)) &&
+        (v.albedoMap === undefined || typeof v.albedoMap === "string")
       );
     case "Light":
       return isLightKindData(v.lightKind) && isFiniteNumber(v.color) && isFiniteNumber(v.intensity);

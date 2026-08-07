@@ -13,8 +13,10 @@ import {
 } from "../network/projectFolderClient.js";
 import { agentConnectionStore, ensureAgentMonitoring } from "../network/hostAgentClient.js";
 import { connectionStore, manifestEntriesStore, sendPublishManifestEntries } from "../network/collabClient.js";
-import { editorSceneHandleStore } from "../store/editorStore.js";
+import { editorSceneHandleStore, selectionStore } from "../store/editorStore.js";
 import { importProjectFile } from "../assets/assetsController.js";
+import { MeshRenderer, serializeComponent } from "@engine/core";
+import { armedTextureSlotStore, disarmTextureSlot, resolveTextureAssignment } from "../scene/textureAssignment.js";
 import {
   PROJECT_TREE_ROOT_PATH,
   INITIAL_PROJECT_TREE_STATE,
@@ -224,6 +226,32 @@ export function ProjectTree(): JSX.Element {
     viewedFolderStore.set(entryPath);
   }
 
+  /**
+   * Fase 11B.1, punto aperto 1: doppio click su una texture → completa
+   * l'assegnazione SOLO se uno slot è stato precedentemente armato dal
+   * bottone "Scegli texture…" in Inspector.tsx (`armedTextureSlotStore`).
+   * Nessuno slot armato → no-op, stesso comportamento "nessuna azione" di
+   * prima di questa fase (Fase 10C, punto aperto 4). `resolveTextureAssignment`
+   * (logica pura, textureAssignment.ts) rifiuta anche se la selezione è
+   * cambiata nel frattempo o non ha più un MeshRenderer.
+   */
+  function onAssignTexture(entryPath: string): void {
+    const armedSlot = armedTextureSlotStore.get();
+    if (!armedSlot) return;
+    const selected = selectionStore.get();
+    const meshRenderer = selected?.getComponent(MeshRenderer) ?? null;
+    const meshRendererData = meshRenderer ? serializeComponent(meshRenderer) : null;
+    const next = resolveTextureAssignment(
+      armedSlot,
+      selected?.id ?? null,
+      meshRendererData && meshRendererData.type === "MeshRenderer" ? meshRendererData : null,
+      entryPath
+    );
+    if (!next || !selected) return;
+    editorSceneHandleStore.get()?.updateComponent(selected, next);
+    disarmTextureSlot();
+  }
+
   function indentStyle(depth: number): CSSProperties {
     return { paddingLeft: depth * INDENT_PX_PER_DEPTH };
   }
@@ -268,6 +296,8 @@ export function ProjectTree(): JSX.Element {
                     onOpenFolderInAssetManager(entryPath);
                   } else if (classification === "model") {
                     void onImportModel(entryPath, entry.name);
+                  } else if (classification === "texture") {
+                    onAssignTexture(entryPath);
                   }
                 }}
                 title={
@@ -277,7 +307,9 @@ export function ProjectTree(): JSX.Element {
                       ? isImporting
                         ? "Importazione in corso…"
                         : "Doppio click per aggiungere alla scena"
-                      : entry.name
+                      : classification === "texture" && armedTextureSlotStore.useValue()
+                        ? "Doppio click per assegnare al materiale selezionato"
+                        : entry.name
                 }
               >
                 {isDirectory ? (

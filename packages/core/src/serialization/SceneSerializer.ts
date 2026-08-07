@@ -47,6 +47,11 @@ export function serializeComponent(component: Component): ComponentData | null {
       color: component.color,
       metalness: component.metalness,
       roughness: component.roughness,
+      // Fase 11B.1 — campo OMESSO (non `undefined` esplicito) quando
+      // assente: stesso principio già seguito per `sourceAssetId` sopra
+      // (`exactOptionalPropertyTypes: true` nel tsconfig rifiuta
+      // un'assegnazione esplicita a `undefined` su un campo opzionale).
+      ...(component.albedoMap !== undefined ? { albedoMap: component.albedoMap } : {}),
     };
   }
   if (component instanceof Light) {
@@ -157,6 +162,12 @@ export function applyComponentData(go: GameObject, data: ComponentData): void {
       // 0 esplicito (metalness minima) come "assente".
       renderer.metalness = data.metalness ?? DEFAULT_METALNESS;
       renderer.roughness = data.roughness ?? DEFAULT_ROUGHNESS;
+      // Fase 11B.1 — a differenza di metalness/roughness, `undefined` è già
+      // il default corretto (nessuna texture assegnata): nessun `??`
+      // necessario, un campo assente in una scena pre-11B.1 produce
+      // esattamente lo stesso comportamento di un campo esplicitamente
+      // assente oggi.
+      renderer.albedoMap = data.albedoMap;
       return;
     }
     case "Light": {
@@ -222,6 +233,8 @@ export function updateComponentData(component: Component, data: ComponentData): 
       // Fase 11 — stesso fallback di retrocompatibilità di applyComponentData sopra.
       component.metalness = data.metalness ?? DEFAULT_METALNESS;
       component.roughness = data.roughness ?? DEFAULT_ROUGHNESS;
+      // Fase 11B.1 — stesso trattamento di applyComponentData sopra.
+      component.albedoMap = data.albedoMap;
       return;
     }
     case "Light": {

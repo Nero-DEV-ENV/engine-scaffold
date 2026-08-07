@@ -2,9 +2,11 @@ import { useEffect, useState } from "react";
 import { FolderIcon, ModelIcon, TextureIcon, FileIcon, BackIcon } from "../icons.js";
 import { viewedFolderStore, listProjectDirectory } from "../network/projectFolderClient.js";
 import type { ProjectEntry } from "../network/projectFolderClient.js";
-import { editorSceneHandleStore } from "../store/editorStore.js";
+import { editorSceneHandleStore, selectionStore } from "../store/editorStore.js";
 import { importProjectFile } from "../assets/assetsController.js";
 import { joinProjectPath, classifyProjectEntry, breadcrumbSegments, parentProjectPath } from "./projectTreeState.js";
+import { MeshRenderer, serializeComponent } from "@engine/core";
+import { armedTextureSlotStore, disarmTextureSlot, resolveTextureAssignment } from "../scene/textureAssignment.js";
 
 type GridLoadState =
   | { status: "loading" }
@@ -74,7 +76,12 @@ export function ProjectFolderGrid(): JSX.Element | null {
       goTo(entryPath);
       return;
     }
-    if (classifyProjectEntry(entry) !== "model" || importingPath) return;
+    const classification = classifyProjectEntry(entry);
+    if (classification === "texture") {
+      onAssignTexture(entryPath);
+      return;
+    }
+    if (classification !== "model" || importingPath) return;
     setImportingPath(entryPath);
     try {
       const meta = await importProjectFile(entryPath, entry.name);
@@ -85,6 +92,29 @@ export function ProjectFolderGrid(): JSX.Element | null {
     } finally {
       setImportingPath(null);
     }
+  }
+
+  /**
+   * Fase 11B.1, punto aperto 1 — stessa logica di `ProjectTree.tsx`
+   * (`onAssignTexture` lì): completa l'assegnazione SOLO se uno slot è
+   * stato armato dal bottone "Scegli texture…" in Inspector.tsx, altrimenti
+   * no-op (stesso comportamento "nessuna azione" di prima di questa fase).
+   */
+  function onAssignTexture(entryPath: string): void {
+    const armedSlot = armedTextureSlotStore.get();
+    if (!armedSlot) return;
+    const selected = selectionStore.get();
+    const meshRenderer = selected?.getComponent(MeshRenderer) ?? null;
+    const meshRendererData = meshRenderer ? serializeComponent(meshRenderer) : null;
+    const next = resolveTextureAssignment(
+      armedSlot,
+      selected?.id ?? null,
+      meshRendererData && meshRendererData.type === "MeshRenderer" ? meshRendererData : null,
+      entryPath
+    );
+    if (!next || !selected) return;
+    editorSceneHandleStore.get()?.updateComponent(selected, next);
+    disarmTextureSlot();
   }
 
   const segments = breadcrumbSegments(path);
@@ -145,7 +175,9 @@ export function ProjectFolderGrid(): JSX.Element | null {
                     ? isImporting
                       ? "Importazione in corso…"
                       : "Doppio click per aggiungere alla scena"
-                    : entry.name
+                    : classification === "texture" && armedTextureSlotStore.useValue()
+                      ? "Doppio click per assegnare al materiale selezionato"
+                      : entry.name
                 }
               >
                 <span className="project-grid-icon">

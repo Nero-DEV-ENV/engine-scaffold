@@ -1,4 +1,5 @@
 import { createExternalStore } from "../store/editorStore.js";
+import { setTextureResolver } from "@engine/core";
 
 /**
  * projectFolderClient.ts — Fase 10B: client HTTP per le route `/project/*`
@@ -39,6 +40,37 @@ const DEFAULT_HTTP_URL = "http://localhost:4100";
 function httpBaseUrl(): string {
   return import.meta.env.VITE_HOST_AGENT_HTTP_URL ?? DEFAULT_HTTP_URL;
 }
+
+/**
+ * Fase 11B.1 — URL assoluta e direttamente fetchabile per `relativePath`
+ * verso `GET /project/file` (stessa route di `fetchProjectFile` sotto, CORS
+ * permissivo già confermato lato host-agent — vedi commento in
+ * `httpServer.ts`). A differenza di `fetchProjectFile`, che scarica i byte
+ * in un `ArrayBuffer` (pensato per `GLTFLoader`, che vuole un Blob URL
+ * locale — vedi `assetsController.ts`), qui la URL host-agent stessa è
+ * usabile DIRETTAMENTE da `THREE.TextureLoader`/`<img src>` senza alcun
+ * passaggio Blob intermedio: una texture Albedo resta un riferimento VIVO
+ * alla project folder (mai copiata in IndexedDB come un modello importato,
+ * vedi JSDoc di `MeshRendererData.albedoMap` in types.ts), quindi non serve
+ * mai "possedere" i byte lato editor, solo poterli richiedere quando serve.
+ */
+export function projectFileUrl(relativePath: string): string {
+  return `${httpBaseUrl()}/project/file?path=${encodeURIComponent(relativePath)}`;
+}
+
+/**
+ * Fase 11B.1 — registra `projectFileUrl` come `TextureResolver` di
+ * `@engine/core` (vedi JSDoc lì) al primo import di questo modulo:
+ * `packages/core` non può costruire da sé questa URL (non conosce porta/
+ * override di host-agent, di competenza esclusiva di questo file), quindi
+ * l'editor è l'unico posto sensato per registrarla. Side-effect a livello
+ * di modulo (non un'esplicita chiamata da main.tsx/App.tsx): questo modulo
+ * viene comunque importato molto presto nel bootstrap (Hierarchy/Inspector/
+ * ProjectTree lo importano tutti), quindi il resolver è garantito registrato
+ * ben prima che un `MeshRenderer` con `albedoMap` venga istanziato o
+ * deserializzato da una scena.
+ */
+setTextureResolver(projectFileUrl);
 
 /** Percorso della project root aperta lato host-agent, o `null` se nessuna. */
 export const projectRootStore = createExternalStore<string | null>(null);
