@@ -7,7 +7,7 @@ import {
   editorSceneHandleStore,
 } from "../store/editorStore.js";
 import { radToDeg, degToRad, roundForDisplay, parseNumericInput } from "./transformFields.js";
-import { Component, serializeComponent, RigidBodyType, DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "@engine/core";
+import { Component, serializeComponent, RigidBodyType, DEFAULT_METALNESS, DEFAULT_ROUGHNESS, DEFAULT_TRANSPARENT, DEFAULT_OPACITY } from "@engine/core";
 import type { ComponentData, ComponentTypeName, GameObject } from "@engine/core";
 import type { EditorSceneHandle } from "../scene/createEditorScene.js";
 import { PlusIcon, RemoveIcon, TextureIcon } from "../icons.js";
@@ -611,6 +611,19 @@ function ComponentFields({
             onCommit={(next) => onCommit({ ...data, roughness: next })}
           />
           <AlbedoMapField gameObjectId={gameObjectId} value={data.albedoMap} onCommit={commitAlbedoMap} />
+          {/* Fase 11B.1 (addendum) — data.transparent opzionale nel tipo,
+              stesso motivo di metalness/roughness sopra: `??` serve solo a
+              soddisfare il tipo, in pratica non è mai undefined a runtime. */}
+          <BooleanField
+            label="Transparent"
+            checked={data.transparent ?? DEFAULT_TRANSPARENT}
+            onCommit={(next) => onCommit({ ...data, transparent: next })}
+          />
+          <RangeField
+            label="Opacity"
+            value={data.opacity ?? DEFAULT_OPACITY}
+            onCommit={(next) => onCommit({ ...data, opacity: next })}
+          />
         </>
       );
     }

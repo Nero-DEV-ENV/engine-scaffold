@@ -67,5 +67,19 @@ export function resolveTextureAssignment(
 ): MeshRendererData | null {
   if (!armedSlot || armedSlot.gameObjectId !== selectedGameObjectId) return null;
   if (!meshRendererData) return null;
-  return { ...meshRendererData, [armedSlot.field]: relativePath };
+  return {
+    ...meshRendererData,
+    [armedSlot.field]: relativePath,
+    // Fase 11B.1 (addendum, richiesto dall'utente durante lo smoke-test):
+    // `MeshStandardMaterial` moltiplica SEMPRE `color × map` (comportamento
+    // PBR standard, non un bug) — un `color` non bianco già impostato
+    // tingerebbe la texture appena assegnata in modo sorprendente per
+    // l'utente. Solo per `albedoMap` (le mappe future di 11B.2 — Normal/
+    // Roughness/Metalness/AO/Emissive — non sono moltiplicate per `color`
+    // allo stesso modo, quindi non serve lo stesso reset): resettato a
+    // bianco (0xffffff) ad ogni assegnazione, l'utente può comunque
+    // ritingerla di proposito dopo dal color-picker in Inspector se lo
+    // desidera davvero.
+    ...(armedSlot.field === "albedoMap" ? { color: 0xffffff } : {}),
+  };
 }

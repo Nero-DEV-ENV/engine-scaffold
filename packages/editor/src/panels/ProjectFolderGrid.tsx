@@ -45,6 +45,10 @@ type GridLoadState =
  */
 export function ProjectFolderGrid(): JSX.Element | null {
   const path = viewedFolderStore.useValue();
+  // Fase 11B.1 — letto UNA volta qui (mai dentro il .map() sulle entry
+  // sotto, e PRIMA dell'early return su path===null sotto): stesso motivo
+  // del fix analogo in ProjectTree.tsx (bug reale in smoke-test).
+  const armedTextureSlot = armedTextureSlotStore.useValue();
   const [state, setState] = useState<GridLoadState>({ status: "loading" });
   const [importingPath, setImportingPath] = useState<string | null>(null);
 
@@ -175,7 +179,7 @@ export function ProjectFolderGrid(): JSX.Element | null {
                     ? isImporting
                       ? "Importazione in corso…"
                       : "Doppio click per aggiungere alla scena"
-                    : classification === "texture" && armedTextureSlotStore.useValue()
+                    : classification === "texture" && armedTextureSlot
                       ? "Doppio click per assegnare al materiale selezionato"
                       : entry.name
                 }

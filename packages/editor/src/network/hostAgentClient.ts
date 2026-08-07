@@ -126,3 +126,49 @@ export function startAgentServer(): Promise<void> {
 export function stopAgentServer(): Promise<void> {
   return postCommand("/server/stop");
 }
+
+/**
+ * Fase 11B.1 — attende che `agentStateStore` raggiunga `idle`/`error`
+ * (fine di uno stop/build in corso), usata da `restartAgentServer` sotto
+ * per non chiamare `/server/start` mentre il processo precedente sta
+ * ancora terminando (finestra in cui due processi server potrebbero
+ * accavallarsi sulla stessa porta).
+ */
+function waitForServerIdle(): Promise<void> {
+  return new Promise((resolve) => {
+    const status = agentStateStore.get().status;
+    if (status === "idle" || status === "error") {
+      resolve();
+      return;
+    }
+    const unsubscribe = agentStateStore.subscribe(() => {
+      const next = agentStateStore.get().status;
+      if (next === "idle" || next === "error") {
+        unsubscribe();
+        resolve();
+      }
+    });
+  });
+}
+
+/**
+ * restartAgentServer — Fase 11B.1: ferma il processo `packages/server`
+ * supervisionato (se in esecuzione) e lo riavvia, riusando `startAgentServer`
+ * SOPRA che già include il passaggio di build (`ProcessSupervisor.start`,
+ * `buildCommand` opzionale, vedi processSupervisor.ts) — un riavvio
+ * quindi ricompila SEMPRE da sorgente prima di ripartire, non serve
+ * alcuna logica di rebuild aggiuntiva qui. No-op se lo stato è già in una
+ * transizione (`building`/`starting`/`stopping`): un secondo comando in
+ * quella finestra non avrebbe un effetto ben definito lato
+ * ProcessSupervisor (vedi `start()`/`stop()` lì, entrambi no-op fuori dai
+ * propri stati di partenza attesi).
+ */
+export async function restartAgentServer(): Promise<void> {
+  const status = agentStateStore.get().status;
+  if (status === "building" || status === "starting" || status === "stopping") return;
+  if (status === "running") {
+    await stopAgentServer();
+    await waitForServerIdle();
+  }
+  await startAgentServer();
+}

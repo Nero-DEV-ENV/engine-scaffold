@@ -21,6 +21,40 @@ export type MeshShape =
   | { kind: "plane"; width: number; height: number };
 
 const DEFAULT_SHAPE: MeshShape = { kind: "box", size: { x: 1, y: 1, z: 1 } };
+
+/**
+ * shapesEqual — Fase 11B.1 (fix da smoke-test): confronto strutturale fra
+ * due `MeshShape`, usato dal setter `shape` sotto per evitare un
+ * `_rebuild()` (dispose+ricrea geometria/materiale) quando la forma
+ * assegnata è IDENTICA a quella corrente. Prima di questo fix, `shape`
+ * veniva riassegnato incondizionatamente ad OGNI commit di
+ * `updateComponentData`/`applyComponentData` (SceneSerializer.ts) —
+ * anche quando a cambiare era un campo completamente diverso (es.
+ * trascinare lo slider Opacity) — quindi ogni singolo tick rigenerava
+ * l'intero materiale, ririchiedendo la mappa Albedo da zero (flash
+ * ripetuto del placeholder "texture mancante" per tutta la durata del
+ * drag, riscontrato in smoke-test, non solo per albedoMap: il rebuild
+ * stesso è la causa, indipendentemente da quale campo abbia innescato il
+ * commit). Prima di questo fix passava inosservato perché un rebuild
+ * senza texture agganciata non produce alcun artefatto visivo.
+ */
+function shapesEqual(a: MeshShape, b: MeshShape): boolean {
+  if (a.kind !== b.kind) return false;
+  switch (a.kind) {
+    case "box": {
+      const other = b as Extract<MeshShape, { kind: "box" }>;
+      return a.size.x === other.size.x && a.size.y === other.size.y && a.size.z === other.size.z;
+    }
+    case "sphere": {
+      const other = b as Extract<MeshShape, { kind: "sphere" }>;
+      return a.radius === other.radius;
+    }
+    case "plane": {
+      const other = b as Extract<MeshShape, { kind: "plane" }>;
+      return a.width === other.width && a.height === other.height;
+    }
+  }
+}
 const DEFAULT_COLOR = 0xffffff;
 /**
  * Fase 11 — default di metalness/roughness allineati ESATTAMENTE ai default
@@ -39,6 +73,25 @@ const DEFAULT_COLOR = 0xffffff;
  */
 export const DEFAULT_METALNESS = 0;
 export const DEFAULT_ROUGHNESS = 1;
+/**
+ * Fase 11B.1 (addendum) — default di `transparent`, allineato al default
+ * nativo di `THREE.MeshStandardMaterial` (`transparent: false`): un
+ * materiale creato prima di questo campo si comportava già così, quindi
+ * l'assenza del campo (scena salvata prima di questo addendum) resta
+ * visivamente identica.
+ */
+export const DEFAULT_TRANSPARENT = false;
+/**
+ * Fase 11B.1 (addendum 2) — default di `opacity`, allineato al default
+ * nativo di `THREE.MeshStandardMaterial` (`opacity: 1`, completamente
+ * opaco). Concettualmente distinto da `transparent` (che abilita il
+ * blending) e dal canale alpha della texture Albedo stessa: `opacity` è
+ * un moltiplicatore globale aggiuntivo, utile anche senza una texture con
+ * trasparenza propria — ma ha effetto visivo solo se `transparent` è
+ * `true` (altrimenti three.js ignora il canale alpha nel compositing,
+ * stesso motivo per cui `transparent` esiste come flag separato).
+ */
+export const DEFAULT_OPACITY = 1;
 
 /**
  * MeshRenderer — Component che possiede una Mesh primitiva (box/sfera/piano)
@@ -62,6 +115,10 @@ export class MeshRenderer extends Component {
   private _color: number = DEFAULT_COLOR;
   private _metalness: number = DEFAULT_METALNESS;
   private _roughness: number = DEFAULT_ROUGHNESS;
+  /** Fase 11B.1 (addendum) — se il materiale rispetta il canale alpha di `albedoMap`/di `color`. Vedi getter/setter `transparent` sotto. */
+  private _transparent: boolean = DEFAULT_TRANSPARENT;
+  /** Fase 11B.1 (addendum 2) — moltiplicatore di opacità globale (0-1). Vedi getter/setter `opacity` sotto. */
+  private _opacity: number = DEFAULT_OPACITY;
   private _mesh: THREE.Mesh | null = null;
 
   /** Percorso relativo (project folder) della mappa Albedo assegnata, o `undefined` = nessuna (Fase 11B.1). Vedi getter/setter `albedoMap` sotto. */
@@ -94,6 +151,10 @@ export class MeshRenderer extends Component {
   }
 
   set shape(value: MeshShape) {
+    // Fase 11B.1 (fix da smoke-test) — vedi JSDoc di `shapesEqual` sopra:
+    // niente rebuild (dispose+ricrea mesh/materiale) se la forma è
+    // strutturalmente identica alla corrente.
+    if (shapesEqual(value, this._shape)) return;
     this._shape = value;
     this._rebuild();
   }
@@ -135,6 +196,50 @@ export class MeshRenderer extends Component {
   }
 
   /**
+   * Fase 11B.1 (addendum, richiesto dall'utente durante lo smoke-test) —
+   * se `true`, il materiale rispetta il canale alpha di `albedoMap` (e di
+   * `color`, che ha comunque un proprio canale alpha in three.js anche
+   * senza texture) invece di ignorarlo come fa di default
+   * `MeshStandardMaterial` (`transparent: false`, alpha sempre 1). Stesso
+   * pattern sincrono di color/metalness/roughness: assegnarlo aggiorna il
+   * materiale esistente senza ricreare la geometria.
+   */
+  get transparent(): boolean {
+    return this._transparent;
+  }
+
+  set transparent(value: boolean) {
+    this._transparent = value;
+    if (this._mesh) {
+      const material = this._mesh.material as THREE.MeshStandardMaterial;
+      material.transparent = value;
+      material.needsUpdate = true;
+    }
+  }
+
+  /**
+   * Fase 11B.1 (addendum 2) — opacità globale (0-1), stesso pattern
+   * sincrono di color/metalness/roughness. Ha effetto visivo solo con
+   * `transparent === true` (vedi commento su `DEFAULT_OPACITY`) — nessun
+   * controllo incrociato qui: assegnabile comunque indipendentemente,
+   * stessa scelta già fatta per color/metalness/roughness fra loro (ogni
+   * campo è un dato indipendente, la UI in Inspector.tsx può comunque
+   * suggerire la relazione senza che il motore la imponga).
+   */
+  get opacity(): number {
+    return this._opacity;
+  }
+
+  set opacity(value: number) {
+    this._opacity = value;
+    if (this._mesh) {
+      const material = this._mesh.material as THREE.MeshStandardMaterial;
+      material.opacity = value;
+      material.needsUpdate = true;
+    }
+  }
+
+  /**
    * Mappa Albedo corrente (Fase 11B.1): percorso RELATIVO alla project
    * folder (es. "Textures/wood_albedo.png"), o `undefined` = nessuna
    * texture assegnata (materiale a colore piatto, comportamento identico a
@@ -148,6 +253,17 @@ export class MeshRenderer extends Component {
   }
 
   set albedoMap(value: string | undefined) {
+    // Fase 11B.1 (fix da smoke-test) — `updateComponentData`
+    // (SceneSerializer.ts) riassegna SEMPRE `albedoMap` ad ogni commit di
+    // *qualunque* campo del componente (es. trascinare lo slider Opacity),
+    // non solo quando l'utente cambia davvero la texture: senza questa
+    // guardia, ogni singolo tick dello slider ripartiva da zero l'intero
+    // ciclo di richiesta/placeholder/risoluzione (flash ripetuto del
+    // placeholder "texture mancante" per tutta la durata del drag,
+    // riscontrato in smoke-test). Stesso principio di un `Object.is` guard
+    // già usato da `createExternalStore.set` (editorStore.ts) per lo
+    // stesso motivo — non ripetere un side-effect per un valore invariato.
+    if (value === this._albedoMap) return;
     this._albedoMap = value;
     this._applyAlbedoMap();
   }
@@ -239,6 +355,8 @@ export class MeshRenderer extends Component {
       color: this._color,
       metalness: this._metalness,
       roughness: this._roughness,
+      transparent: this._transparent,
+      opacity: this._opacity,
     });
     const mesh = new THREE.Mesh(geometry, material);
     if (this._shape.kind === "plane") {

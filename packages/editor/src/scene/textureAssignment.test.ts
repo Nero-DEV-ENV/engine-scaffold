@@ -58,11 +58,18 @@ describe("resolveTextureAssignment", () => {
     expect(result).toBeNull();
   });
 
-  it("assegna il percorso relativo ad albedoMap preservando gli altri campi", () => {
+  it("assegna il percorso relativo ad albedoMap preservando metalness/roughness", () => {
     const armed = { gameObjectId: "go-1", field: "albedoMap" } as const;
     const data = { ...meshRendererData(), metalness: 0.3, roughness: 0.7 };
     const result = resolveTextureAssignment(armed, "go-1", data, "Textures/wood_albedo.png");
-    expect(result).toEqual({ ...data, albedoMap: "Textures/wood_albedo.png" });
+    expect(result).toEqual({ ...data, albedoMap: "Textures/wood_albedo.png", color: 0xffffff });
+  });
+
+  it("resetta color a bianco per non far interferire un colore già impostato con la texture", () => {
+    const armed = { gameObjectId: "go-1", field: "albedoMap" } as const;
+    const data = { ...meshRendererData(), color: 0xff0000 };
+    const result = resolveTextureAssignment(armed, "go-1", data, "Textures/wood_albedo.png");
+    expect(result?.color).toBe(0xffffff);
   });
 
   it("sovrascrive un albedoMap già presente con quello appena assegnato", () => {
