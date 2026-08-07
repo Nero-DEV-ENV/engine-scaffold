@@ -5,9 +5,11 @@ import {
   ensureAgentMonitoring,
   startAgentServer,
   stopAgentServer,
+  restartAgentServer,
   type AgentState,
   type AgentConnectionState,
 } from "../network/hostAgentClient.js";
+import { RestartIcon } from "../icons.js";
 
 /**
  * HostAgentPanel — Fase 6F.3.a: avvia/ferma packages/server tramite
@@ -41,6 +43,14 @@ export function HostAgentPanel(): JSX.Element {
   const canStart = agentReachable && (state.status === "idle" || state.status === "error");
   const canStop =
     agentReachable && (state.status === "building" || state.status === "starting" || state.status === "running");
+  // Fase 11B.1 — stesso insieme di stati "non in transizione" di canStart/
+  // canStop sopra, ma senza restringere a idle/error/running specifici: un
+  // riavvio è sensato sia da fermo (equivale a uno start) sia da in
+  // esecuzione (stop atteso + start) — solo le transizioni intermedie
+  // (building/starting/stopping) lo disabilitano, vedi guardia in
+  // restartAgentServer (hostAgentClient.ts).
+  const canRestart =
+    agentReachable && state.status !== "building" && state.status !== "starting" && state.status !== "stopping";
   const label = statusLabel(connection, state);
 
   return (
@@ -60,6 +70,16 @@ export function HostAgentPanel(): JSX.Element {
           onClick={() => void startAgentServer()}
         >
           Start
+        </button>
+        <button
+          type="button"
+          className="host-status-icon-button"
+          disabled={!canRestart}
+          onClick={() => void restartAgentServer()}
+          aria-label="Riavvia server"
+          title="Riavvia (ricompila e riavvia packages/server)"
+        >
+          <RestartIcon />
         </button>
         <button type="button" className="host-status-button" disabled={!canStop} onClick={() => void stopAgentServer()}>
           Stop

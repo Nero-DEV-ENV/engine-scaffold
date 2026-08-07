@@ -123,6 +123,33 @@ export function BackIcon(): JSX.Element {
 }
 
 /**
+ * Fase 11B.1 — bottone "Riavvia" del pannello Host Agent
+ * (HostAgentPanel.tsx): freccia circolare (refresh), stesso linguaggio
+ * visivo delle altre icone (stroke-only, currentColor, nessuna prop).
+ */
+export function RestartIcon(): JSX.Element {
+  return (
+    <svg {...commonProps}>
+      <path
+        d="M12.5 8A4.5 4.5 0 1 1 11 4.6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+      <path
+        d="M11 2.3V5H13.7"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/**
  * Fase 10C — texture (PNG/JPG) nella griglia cartella (`ProjectFolderGrid.tsx`):
  * distingue visivamente le immagini dai file generici, indistinguibili fino
  * ad ora nell'albero (dove sia "texture" che "other" usavano `FileIcon`).

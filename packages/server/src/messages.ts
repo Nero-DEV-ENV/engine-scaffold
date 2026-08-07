@@ -265,12 +265,18 @@ export function isComponentData(value: unknown): value is ComponentData {
       // documento originale, stesso schema già emerso in Fase 11 per
       // metalness/roughness (estendere `types.ts` non basta, questo
       // validator strutturale lato server va aggiornato di pari passo).
+      // Fase 11B.1 (addendum) — stesso principio per `transparent`
+      // (booleano opzionale, richiesto durante lo smoke-test).
+      // Fase 11B.1 (addendum 2) — stesso principio per `opacity`
+      // (numerico opzionale, richiesto durante lo smoke-test).
       return (
         isMeshShapeData(v.shape) &&
         isFiniteNumber(v.color) &&
         (v.metalness === undefined || isFiniteNumber(v.metalness)) &&
         (v.roughness === undefined || isFiniteNumber(v.roughness)) &&
-        (v.albedoMap === undefined || typeof v.albedoMap === "string")
+        (v.albedoMap === undefined || typeof v.albedoMap === "string") &&
+        (v.transparent === undefined || typeof v.transparent === "boolean") &&
+        (v.opacity === undefined || isFiniteNumber(v.opacity))
       );
     case "Light":
       return isLightKindData(v.lightKind) && isFiniteNumber(v.color) && isFiniteNumber(v.intensity);

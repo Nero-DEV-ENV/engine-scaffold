@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { GameObject, Destroy } from "../core/GameObject.js";
 import type { Component } from "../core/Component.js";
-import { MeshRenderer, DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "../rendering/MeshRenderer.js";
+import { MeshRenderer, DEFAULT_METALNESS, DEFAULT_ROUGHNESS, DEFAULT_TRANSPARENT, DEFAULT_OPACITY } from "../rendering/MeshRenderer.js";
 import { Light } from "../rendering/Light.js";
 import { RigidBody } from "../physics/RigidBody.js";
 import { BoxCollider, SphereCollider } from "../physics/Collider.js";
@@ -52,6 +52,8 @@ export function serializeComponent(component: Component): ComponentData | null {
       // (`exactOptionalPropertyTypes: true` nel tsconfig rifiuta
       // un'assegnazione esplicita a `undefined` su un campo opzionale).
       ...(component.albedoMap !== undefined ? { albedoMap: component.albedoMap } : {}),
+      transparent: component.transparent,
+      opacity: component.opacity,
     };
   }
   if (component instanceof Light) {
@@ -168,6 +170,8 @@ export function applyComponentData(go: GameObject, data: ComponentData): void {
       // esattamente lo stesso comportamento di un campo esplicitamente
       // assente oggi.
       renderer.albedoMap = data.albedoMap;
+      renderer.transparent = data.transparent ?? DEFAULT_TRANSPARENT;
+      renderer.opacity = data.opacity ?? DEFAULT_OPACITY;
       return;
     }
     case "Light": {
@@ -235,6 +239,8 @@ export function updateComponentData(component: Component, data: ComponentData): 
       component.roughness = data.roughness ?? DEFAULT_ROUGHNESS;
       // Fase 11B.1 — stesso trattamento di applyComponentData sopra.
       component.albedoMap = data.albedoMap;
+      component.transparent = data.transparent ?? DEFAULT_TRANSPARENT;
+      component.opacity = data.opacity ?? DEFAULT_OPACITY;
       return;
     }
     case "Light": {

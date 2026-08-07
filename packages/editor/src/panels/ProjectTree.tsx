@@ -96,6 +96,12 @@ export function ProjectTree(): JSX.Element {
   const agentReachable = connection === "connected";
   const collabStatus = connectionStore.useValue();
   const manifestByPath = manifestEntriesStore.useValue();
+  // Fase 11B.1 — letto UNA volta qui (mai dentro il .map() sulle entry
+  // sotto): un hook chiamato condizionalmente per ogni entry violerebbe le
+  // Rules of Hooks (il numero di chiamate varierebbe con la classificazione
+  // e il conteggio delle entry della cartella) — bug reale riscontrato in
+  // smoke-test ("Rendered more hooks than during the previous render").
+  const armedTextureSlot = armedTextureSlotStore.useValue();
 
   const [pathInput, setPathInput] = useState("");
   const [openError, setOpenError] = useState<string | null>(null);
@@ -307,7 +313,7 @@ export function ProjectTree(): JSX.Element {
                       ? isImporting
                         ? "Importazione in corso…"
                         : "Doppio click per aggiungere alla scena"
-                      : classification === "texture" && armedTextureSlotStore.useValue()
+                      : classification === "texture" && armedTextureSlot
                         ? "Doppio click per assegnare al materiale selezionato"
                         : entry.name
                 }

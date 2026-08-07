@@ -77,6 +77,18 @@ export interface MeshRendererData {
    * metalness/roughness sopra, `version` di SceneData resta `1`.
    */
   albedoMap?: string;
+  /**
+   * Fase 11B.1 (addendum) — se il materiale rispetta il canale alpha
+   * (texture Albedo con trasparenza, o `color` con alpha < 1). Assente =
+   * `false` (comportamento identico a prima di questo campo, stessa
+   * retrocompatibilità di metalness/roughness/albedoMap sopra).
+   */
+  transparent?: boolean;
+  /**
+   * Fase 11B.1 (addendum 2) — opacità globale (0-1). Assente = `1`
+   * (completamente opaco, comportamento identico a prima di questo campo).
+   */
+  opacity?: number;
 }
 
 /**
