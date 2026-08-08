@@ -269,6 +269,12 @@ export function isComponentData(value: unknown): value is ComponentData {
       // (booleano opzionale, richiesto durante lo smoke-test).
       // Fase 11B.1 (addendum 2) — stesso principio per `opacity`
       // (numerico opzionale, richiesto durante lo smoke-test).
+      // Fase 11B.2 — stesso principio per le 5 mappe texture nuove
+      // (Normal/Roughness/Metalness/AO/Emissive, stringa opzionale come
+      // albedoMap) e per `emissive` (numerico opzionale, come metalness/
+      // roughness): punto facile da dimenticare, già successo 2 volte
+      // nelle fasi precedenti (Fase 11, 11B.1) — verificato esplicitamente
+      // anche qui.
       return (
         isMeshShapeData(v.shape) &&
         isFiniteNumber(v.color) &&
@@ -276,7 +282,13 @@ export function isComponentData(value: unknown): value is ComponentData {
         (v.roughness === undefined || isFiniteNumber(v.roughness)) &&
         (v.albedoMap === undefined || typeof v.albedoMap === "string") &&
         (v.transparent === undefined || typeof v.transparent === "boolean") &&
-        (v.opacity === undefined || isFiniteNumber(v.opacity))
+        (v.opacity === undefined || isFiniteNumber(v.opacity)) &&
+        (v.normalMap === undefined || typeof v.normalMap === "string") &&
+        (v.roughnessMap === undefined || typeof v.roughnessMap === "string") &&
+        (v.metalnessMap === undefined || typeof v.metalnessMap === "string") &&
+        (v.aoMap === undefined || typeof v.aoMap === "string") &&
+        (v.emissiveMap === undefined || typeof v.emissiveMap === "string") &&
+        (v.emissive === undefined || isFiniteNumber(v.emissive))
       );
     case "Light":
       return isLightKindData(v.lightKind) && isFiniteNumber(v.color) && isFiniteNumber(v.intensity);

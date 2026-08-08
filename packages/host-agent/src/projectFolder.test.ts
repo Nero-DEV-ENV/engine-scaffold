@@ -284,6 +284,22 @@ describe("ProjectFolderSession — watch automatico del filesystem (Fase 10G)", 
     session.closeRoot();
   });
 
+  it("emette 'changed' con la sottocartella quando un file ESISTENTE lì dentro viene sovrascritto (Fase 11B.2 — necessario per l'invalidazione texture)", async () => {
+    const existingPath = path.join(watchFixtureRoot, "Assets", "esistente.png");
+    writeFileSync(existingPath, "contenuto iniziale");
+    const session = new ProjectFolderSession({ watchDebounceMs: 30 });
+    session.openRoot(watchFixtureRoot);
+    await waitForWatcherReady();
+    // Sovrascrittura in-place di un file GIÀ presente prima dell'apertura
+    // della root (quindi non un add: chokidar la vede come "change") —
+    // esattamente il caso reale di una texture riesportata da uno
+    // strumento esterno mentre l'editor è aperto.
+    writeFileSync(existingPath, "contenuto nuovo");
+    const changedPaths = await waitForChanged(session);
+    expect(changedPaths).toEqual(["Assets"]);
+    session.closeRoot();
+  });
+
   it("raggruppa più cambiamenti ravvicinati in un'unica notifica (debounce)", async () => {
     const session = new ProjectFolderSession({ watchDebounceMs: 100 });
     session.openRoot(watchFixtureRoot);

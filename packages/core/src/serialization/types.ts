@@ -89,6 +89,29 @@ export interface MeshRendererData {
    * (completamente opaco, comportamento identico a prima di questo campo).
    */
   opacity?: number;
+  /**
+   * Fase 11B.2 — percorsi RELATIVI alla project folder delle mappe
+   * Normal/Roughness/Metalness/AO/Emissive, stessa semantica di
+   * `albedoMap` sopra (MAI byte, ognuna opzionale, assente = quella mappa
+   * non è attiva, comportamento nativo `MeshStandardMaterial` senza di
+   * essa). `roughnessMap`/`metalnessMap` MODULANO per-pixel gli scalari
+   * `roughness`/`metalness` sopra (non li sostituiscono, comportamento
+   * nativo three.js). `aoMap` richiede `uv2` sulla geometria — garantito
+   * incondizionatamente da `geometryForShape` in MeshRenderer.ts,
+   * indipendentemente da questo campo.
+   */
+  normalMap?: string;
+  roughnessMap?: string;
+  metalnessMap?: string;
+  aoMap?: string;
+  emissiveMap?: string;
+  /**
+   * Fase 11B.2 — colore emissivo scalare (0xRRGGBB), indipendente da
+   * `emissiveMap` sopra (le due si MOLTIPLICANO fra loro, comportamento
+   * nativo three.js). Assente = `0x000000` (nero, nessuna emissione —
+   * comportamento identico a prima di questo campo).
+   */
+  emissive?: number;
 }
 
 /**

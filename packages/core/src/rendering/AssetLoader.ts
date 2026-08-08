@@ -177,8 +177,21 @@ function getSharedTextureLoader(): THREE.TextureLoader {
  * cache per Promise (non solo per Texture risolta) evita richieste
  * duplicate se due `MeshRenderer` assegnano lo stesso percorso nella
  * stessa finestra di caricamento.
+ *
+ * `listeners` — Fase 11B.2: chi vuole essere notificato se la `Texture` di
+ * questa entry viene sostituita da `invalidateTexture` sotto (il file su
+ * disco è cambiato mentre è già visualizzato). Popolato da
+ * `subscribeTextureUpdates`, mai direttamente. Stessa entry, stesso
+ * `refCount` prima e dopo un'invalidazione: solo l'istanza `Texture`
+ * sottostante cambia, l'identità della entry di cache no.
  */
-const textureCache = new Map<string, { promise: Promise<THREE.Texture>; refCount: number }>();
+interface TextureCacheEntry {
+  promise: Promise<THREE.Texture>;
+  refCount: number;
+  listeners: Set<(texture: THREE.Texture) => void>;
+}
+
+const textureCache = new Map<string, TextureCacheEntry>();
 
 /**
  * requestTexture — richiede la `THREE.Texture` per `relativePath` (Albedo),
@@ -209,7 +222,7 @@ export function requestTexture(relativePath: string): Promise<THREE.Texture> | n
       (error) => reject(new Error(`requestTexture: impossibile caricare "${relativePath}": ${String(error)}`))
     );
   });
-  textureCache.set(relativePath, { promise, refCount: 1 });
+  textureCache.set(relativePath, { promise, refCount: 1, listeners: new Set() });
   return promise;
 }
 
@@ -233,4 +246,108 @@ export function releaseTexture(relativePath: string): void {
       // Promise rigettata: nessuna THREE.Texture reale da disporre.
     }
   );
+}
+
+/**
+ * subscribeTextureUpdates — Fase 11B.2: registra `callback` per essere
+ * notificato quando la texture in cache per `relativePath` viene sostituita
+ * da `invalidateTexture` sotto (il file su disco è cambiato mentre è già
+ * assegnato/visualizzato da un `MeshRenderer` — vedi collegamento al canale
+ * watch `/project/watch` in `projectFolderClient.ts` lato editor). Va
+ * chiamata SOLO subito dopo un `requestTexture(relativePath)` che ha
+ * restituito una Promise non-null (cioè un riferimento è stato acquisito
+ * per quel percorso): se nessuna entry di cache esiste ancora per quel
+ * percorso, è un no-op difensivo che restituisce una unsubscribe vuota —
+ * non dovrebbe capitare nell'uso corretto da `MeshRenderer`/`TextureMapSlot`.
+ * Restituisce una funzione di annullamento, da chiamare ESATTAMENTE nello
+ * stesso momento in cui il riferimento viene rilasciato con
+ * `releaseTexture` per lo stesso percorso — mai lasciare un listener vivo
+ * dopo che il proprio materiale non usa più quella texture.
+ */
+export function subscribeTextureUpdates(
+  relativePath: string,
+  callback: (texture: THREE.Texture) => void
+): () => void {
+  const cached = textureCache.get(relativePath);
+  if (!cached) return () => {};
+  cached.listeners.add(callback);
+  return () => cached.listeners.delete(callback);
+}
+
+/**
+ * invalidateTexture — Fase 11B.2 (deferito da 11B.1): forza un
+ * ricaricamento da zero della texture in cache per `relativePath`,
+ * notificando ogni sottoscrittore (`subscribeTextureUpdates` sopra) con la
+ * nuova `THREE.Texture` non appena disponibile — così un `MeshRenderer` che
+ * la sta già mostrando (Albedo/Normal/Roughness/Metalness/AO/Emissive) si
+ * aggiorna in tempo reale senza bisogno di riassegnare la mappa a mano.
+ * No-op se nessuna entry di cache esiste per quel percorso (nessuno lo sta
+ * visualizzando: nulla da invalidare qui, un futuro `requestTexture` per
+ * quello stesso percorso creerà comunque una entry nuova che legge la
+ * versione aggiornata dal disco) o se nessun `TextureResolver` è
+ * registrato. Il `refCount`/i `listeners` esistenti restano sulla STESSA
+ * entry di cache (stessi retainer, stessa identità) — cambia solo la
+ * `Texture` sottostante a cui puntano.
+ */
+export function invalidateTexture(relativePath: string): void {
+  const cached = textureCache.get(relativePath);
+  if (!cached || !textureResolver) return;
+  const baseUrl = textureResolver(relativePath);
+  // Bug scoperto in smoke-test: senza un cache-buster, questa è la STESSA
+  // URL usata dalla richiesta originale di `requestTexture` — il browser
+  // serve i byte vecchi dalla propria cache HTTP per quella URL esatta
+  // (indipendentemente da `THREE.Cache`, disattivato di default e comunque
+  // non il livello di cache coinvolto qui), quindi il ricaricamento
+  // "riuscirebbe" restituendo silenziosamente la stessa texture di prima.
+  // Un parametro di query univoco forza sempre un fetch di rete reale.
+  // `baseUrl.includes("?")` perché `TextureResolver` (implementato
+  // dall'editor come `projectFileUrl`, vedi JSDoc di `setTextureResolver`
+  // sotto) include già una propria query string (`?path=...`).
+  const cacheBustSeparator = baseUrl.includes("?") ? "&" : "?";
+  const url = `${baseUrl}${cacheBustSeparator}_invalidatedAt=${Date.now()}`;
+  const oldPromise = cached.promise;
+  const newPromise = new Promise<THREE.Texture>((resolve, reject) => {
+    getSharedTextureLoader().load(
+      url,
+      (texture) => resolve(texture),
+      undefined,
+      (error) => reject(new Error(`invalidateTexture: impossibile ricaricare "${relativePath}": ${String(error)}`))
+    );
+  });
+  cached.promise = newPromise;
+  newPromise
+    .then((texture) => {
+      cached.listeners.forEach((listener) => listener(texture));
+      // La vecchia texture (se si era già risolta) non è più referenziata
+      // da alcun materiale dopo la notifica sincrona sopra a tutti i
+      // sottoscrittori: disporla libera la risorsa GPU. Se era ancora in
+      // volo o era stata rigettata, non c'è nulla da disporre (stesso
+      // trattamento di `releaseTexture` sopra).
+      oldPromise.then(
+        (oldTexture) => oldTexture.dispose(),
+        () => {}
+      );
+    })
+    .catch(() => {
+      // Ricaricamento fallito (es. il file è stato cancellato nella stessa
+      // finestra di debounce in cui è arrivata la notifica di modifica):
+      // notifica comunque i sottoscrittori con MISSING_TEXTURE, stesso
+      // fallback già usato da requestTexture/MeshRenderer per un caricamento
+      // iniziale fallito — non lasciarli agganciati alla texture ormai
+      // stantia precedente.
+      cached.listeners.forEach((listener) => listener(getMissingTexture()));
+    });
+}
+
+/**
+ * cachedTexturePaths — Fase 11B.2: percorsi relativi attualmente presenti
+ * in cache (indipendentemente dal refcount). Usata SOLO da
+ * `projectFolderClient.ts` lato editor per sapere, quando arriva una
+ * notifica dal canale watch `/project/watch`, quali percorsi in cache
+ * ricadono nelle cartelle segnalate come cambiate e vanno quindi passati a
+ * `invalidateTexture` — `packages/core` non ha altrimenti bisogno di
+ * esporre l'intera cache all'esterno.
+ */
+export function cachedTexturePaths(): string[] {
+  return Array.from(textureCache.keys());
 }

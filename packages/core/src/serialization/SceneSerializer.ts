@@ -1,7 +1,14 @@
 import * as THREE from "three";
 import { GameObject, Destroy } from "../core/GameObject.js";
 import type { Component } from "../core/Component.js";
-import { MeshRenderer, DEFAULT_METALNESS, DEFAULT_ROUGHNESS, DEFAULT_TRANSPARENT, DEFAULT_OPACITY } from "../rendering/MeshRenderer.js";
+import {
+  MeshRenderer,
+  DEFAULT_METALNESS,
+  DEFAULT_ROUGHNESS,
+  DEFAULT_TRANSPARENT,
+  DEFAULT_OPACITY,
+  DEFAULT_EMISSIVE,
+} from "../rendering/MeshRenderer.js";
 import { Light } from "../rendering/Light.js";
 import { RigidBody } from "../physics/RigidBody.js";
 import { BoxCollider, SphereCollider } from "../physics/Collider.js";
@@ -54,6 +61,17 @@ export function serializeComponent(component: Component): ComponentData | null {
       ...(component.albedoMap !== undefined ? { albedoMap: component.albedoMap } : {}),
       transparent: component.transparent,
       opacity: component.opacity,
+      // Fase 11B.2 — stesso trattamento "campo omesso se assente" delle 6
+      // mappe texture (exactOptionalPropertyTypes: true), stesso motivo di
+      // albedoMap sopra. `emissive` invece è sempre scritto (come
+      // color/transparent/opacity): non è opzionale in pratica, solo in
+      // lettura per retrocompatibilità (vedi JSDoc in types.ts).
+      ...(component.normalMap !== undefined ? { normalMap: component.normalMap } : {}),
+      ...(component.roughnessMap !== undefined ? { roughnessMap: component.roughnessMap } : {}),
+      ...(component.metalnessMap !== undefined ? { metalnessMap: component.metalnessMap } : {}),
+      ...(component.aoMap !== undefined ? { aoMap: component.aoMap } : {}),
+      ...(component.emissiveMap !== undefined ? { emissiveMap: component.emissiveMap } : {}),
+      emissive: component.emissive,
     };
   }
   if (component instanceof Light) {
@@ -172,6 +190,17 @@ export function applyComponentData(go: GameObject, data: ComponentData): void {
       renderer.albedoMap = data.albedoMap;
       renderer.transparent = data.transparent ?? DEFAULT_TRANSPARENT;
       renderer.opacity = data.opacity ?? DEFAULT_OPACITY;
+      // Fase 11B.2 — stesso trattamento di albedoMap sopra per le 5 mappe
+      // nuove (undefined è già il default corretto, nessun `??` necessario).
+      // `emissive` invece segue lo stesso fallback di metalness/roughness
+      // sopra (numerico, scritto sempre da un MeshRenderer serializzato
+      // dopo questa fase, ma assente in una scena salvata prima).
+      renderer.normalMap = data.normalMap;
+      renderer.roughnessMap = data.roughnessMap;
+      renderer.metalnessMap = data.metalnessMap;
+      renderer.aoMap = data.aoMap;
+      renderer.emissiveMap = data.emissiveMap;
+      renderer.emissive = data.emissive ?? DEFAULT_EMISSIVE;
       return;
     }
     case "Light": {
@@ -241,6 +270,13 @@ export function updateComponentData(component: Component, data: ComponentData): 
       component.albedoMap = data.albedoMap;
       component.transparent = data.transparent ?? DEFAULT_TRANSPARENT;
       component.opacity = data.opacity ?? DEFAULT_OPACITY;
+      // Fase 11B.2 — stesso trattamento di applyComponentData sopra.
+      component.normalMap = data.normalMap;
+      component.roughnessMap = data.roughnessMap;
+      component.metalnessMap = data.metalnessMap;
+      component.aoMap = data.aoMap;
+      component.emissiveMap = data.emissiveMap;
+      component.emissive = data.emissive ?? DEFAULT_EMISSIVE;
       return;
     }
     case "Light": {
