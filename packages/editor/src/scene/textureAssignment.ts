@@ -4,14 +4,20 @@ import type { MeshRendererData } from "@engine/core";
 /**
  * textureAssignment.ts — Fase 11B.1, punto aperto 1 confermato dall'utente:
  * meccanismo di assegnazione a due gesti — bottone "Scegli texture..." in
- * Inspector.tsx "arma" lo slot Albedo del MeshRenderer del GameObject
+ * Inspector.tsx "arma" lo slot di una mappa del MeshRenderer del GameObject
  * selezionato, poi un doppio click su una texture in ProjectTree.tsx/
  * ProjectFolderGrid.tsx completa l'assegnazione. Preferito a un file-picker
  * modale dedicato perché riusa l'infrastruttura di doppio click già
- * esistente (Fase 10C) invece di introdurne una nuova, e scala pulito a
- * Fase 11B.2 (Normal/Roughness/Metalness/AO/Emissive): ogni mappa avrà il
- * proprio bottone "Scegli...", ciascuno arma un `field` diverso sullo
- * stesso `ArmedTextureSlot`.
+ * esistente (Fase 10C) invece di introdurne una nuova.
+ *
+ * Fase 11B.2 (punto aperto 4 confermato) — `ArmedTextureSlot`/
+ * `armAlbedoMapSlot` (nomi originali, solo Albedo) generalizzati in
+ * `ArmedMaterialSlot`/`armMaterialMapSlot`: `field` è ora un'unione delle 6
+ * mappe, un solo bottone "Scegli..." per mappa (Inspector.tsx) arma il
+ * proprio `field` sullo stesso store — nessuna duplicazione di store/logica
+ * per le 5 mappe in più, `resolveTextureAssignment` sotto era già generica
+ * (usa `armedSlot.field` come chiave computata) e non ha richiesto modifiche
+ * di logica, solo l'allargamento del tipo.
  *
  * `armedTextureSlotStore` vive qui (non in editorStore.ts): è uno stato
  * specifico dell'assegnazione texture, non un concetto generale di editor
@@ -19,25 +25,29 @@ import type { MeshRendererData } from "@engine/core";
  * già seguita per gli altri store dedicati del progetto (es.
  * `projectRootStore` in projectFolderClient.ts, non in editorStore.ts).
  */
-export interface ArmedTextureSlot {
+export interface ArmedMaterialSlot {
   gameObjectId: string;
-  field: "albedoMap";
+  field: "albedoMap" | "normalMap" | "roughnessMap" | "metalnessMap" | "aoMap" | "emissiveMap";
 }
 
-export const armedTextureSlotStore = createExternalStore<ArmedTextureSlot | null>(null);
+export const armedTextureSlotStore = createExternalStore<ArmedMaterialSlot | null>(null);
 
 /**
- * armAlbedoMapSlot — arma lo slot Albedo per `gameObjectId`. Cliccare di
- * nuovo il bottone mentre lo STESSO slot è già armato lo disarma (toggle a
- * due stati, stesso linguaggio di un bottone premuto/rilasciato) invece di
- * ri-armarlo su se stesso senza alcun effetto visibile.
+ * armMaterialMapSlot — arma lo slot `field` per `gameObjectId`. Cliccare di
+ * nuovo il bottone dello STESSO slot (stesso `gameObjectId` E `field`)
+ * mentre è già armato lo disarma (toggle a due stati, stesso linguaggio di
+ * un bottone premuto/rilasciato) invece di ri-armarlo su se stesso senza
+ * alcun effetto visibile. Armare un `field` diverso sullo stesso
+ * GameObject (o lo stesso `field` su un GameObject diverso) sostituisce
+ * semplicemente lo slot armato precedente — un solo slot armato alla
+ * volta, coerente con "un solo doppio click completa un'assegnazione".
  */
-export function armAlbedoMapSlot(gameObjectId: string): void {
+export function armMaterialMapSlot(gameObjectId: string, field: ArmedMaterialSlot["field"]): void {
   const current = armedTextureSlotStore.get();
-  if (current && current.gameObjectId === gameObjectId && current.field === "albedoMap") {
+  if (current && current.gameObjectId === gameObjectId && current.field === field) {
     armedTextureSlotStore.set(null);
   } else {
-    armedTextureSlotStore.set({ gameObjectId, field: "albedoMap" });
+    armedTextureSlotStore.set({ gameObjectId, field });
   }
 }
 
@@ -60,7 +70,7 @@ export function disarmTextureSlot(): void {
  * (più) un componente MeshRenderer.
  */
 export function resolveTextureAssignment(
-  armedSlot: ArmedTextureSlot | null,
+  armedSlot: ArmedMaterialSlot | null,
   selectedGameObjectId: string | null,
   meshRendererData: MeshRendererData | null,
   relativePath: string

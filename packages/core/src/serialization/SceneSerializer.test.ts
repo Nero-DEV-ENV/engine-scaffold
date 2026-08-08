@@ -126,6 +126,68 @@ describe("SceneSerializer", () => {
     expect(restoredRenderer!.roughness).toBe(0.2);
   });
 
+  it("round-trip: MeshRenderer con le 5 mappe texture (Normal/Roughness/Metalness/AO/Emissive) + emissive scalare (Fase 11B.2)", () => {
+    const go = new GameObject("Superficie completa");
+    const renderer = go.addComponent(MeshRenderer);
+    renderer.normalMap = "Textures/wood_normal.png";
+    renderer.roughnessMap = "Textures/wood_roughness.png";
+    renderer.metalnessMap = "Textures/wood_metalness.png";
+    renderer.aoMap = "Textures/wood_ao.png";
+    renderer.emissiveMap = "Textures/wood_emissive.png";
+    renderer.emissive = 0x112233;
+
+    const data = throughJSON(serializeScene([go]));
+    expect(data.roots[0]!.components[0]).toMatchObject({
+      normalMap: "Textures/wood_normal.png",
+      roughnessMap: "Textures/wood_roughness.png",
+      metalnessMap: "Textures/wood_metalness.png",
+      aoMap: "Textures/wood_ao.png",
+      emissiveMap: "Textures/wood_emissive.png",
+      emissive: 0x112233,
+    });
+
+    const [restored] = deserializeScene(data);
+    const restoredRenderer = restored!.getComponent(MeshRenderer);
+    expect(restoredRenderer!.normalMap).toBe("Textures/wood_normal.png");
+    expect(restoredRenderer!.roughnessMap).toBe("Textures/wood_roughness.png");
+    expect(restoredRenderer!.metalnessMap).toBe("Textures/wood_metalness.png");
+    expect(restoredRenderer!.aoMap).toBe("Textures/wood_ao.png");
+    expect(restoredRenderer!.emissiveMap).toBe("Textures/wood_emissive.png");
+    expect(restoredRenderer!.emissive).toBe(0x112233);
+  });
+
+  it("deserializeScene applica i default del motore (nessuna mappa, emissive nero) a un MeshRenderer serializzato PRIMA di Fase 11B.2 (Fase 11B.2)", () => {
+    const legacyData: SceneData = {
+      version: 1,
+      roots: [
+        {
+          id: "22222222-2222-2222-2222-222222222222",
+          name: "Cubo pre-11B.2",
+          active: true,
+          transform: {
+            position: { x: 0, y: 0, z: 0 },
+            rotation: { x: 0, y: 0, z: 0, w: 1 },
+            scale: { x: 1, y: 1, z: 1 },
+          },
+          // Nessuna delle 5 mappe/emissive: forma esatta di un MeshRenderer
+          // serializzato prima di Fase 11B.2 (vedi JSDoc di MeshRendererData
+          // in types.ts).
+          components: [{ type: "MeshRenderer", shape: { kind: "box", size: { x: 1, y: 1, z: 1 } }, color: 0xffffff } as ComponentData],
+          children: [],
+        },
+      ],
+    };
+
+    const [restored] = deserializeScene(legacyData);
+    const restoredRenderer = restored!.getComponent(MeshRenderer);
+    expect(restoredRenderer!.normalMap).toBeUndefined();
+    expect(restoredRenderer!.roughnessMap).toBeUndefined();
+    expect(restoredRenderer!.metalnessMap).toBeUndefined();
+    expect(restoredRenderer!.aoMap).toBeUndefined();
+    expect(restoredRenderer!.emissiveMap).toBeUndefined();
+    expect(restoredRenderer!.emissive).toBe(0x000000);
+  });
+
   it("deserializeScene applica i default del motore (metalness 0, roughness 1) a un MeshRenderer serializzato PRIMA di Fase 11 (Fase 11)", () => {
     const legacyData: SceneData = {
       version: 1,
@@ -336,6 +398,30 @@ describe("SceneSerializer", () => {
 
       expect(renderer.metalness).toBe(0.6);
       expect(renderer.roughness).toBe(0.3);
+    });
+
+    it("aggiorna le 5 mappe texture + emissive di un MeshRenderer esistente (Fase 11B.2)", () => {
+      const go = new GameObject("Cubo");
+      const renderer = go.addComponent(MeshRenderer);
+
+      updateComponentData(renderer, {
+        type: "MeshRenderer",
+        shape: { kind: "box", size: { x: 1, y: 1, z: 1 } },
+        color: 0xffffff,
+        normalMap: "Textures/n.png",
+        roughnessMap: "Textures/r.png",
+        metalnessMap: "Textures/m.png",
+        aoMap: "Textures/ao.png",
+        emissiveMap: "Textures/e.png",
+        emissive: 0xff8800,
+      });
+
+      expect(renderer.normalMap).toBe("Textures/n.png");
+      expect(renderer.roughnessMap).toBe("Textures/r.png");
+      expect(renderer.metalnessMap).toBe("Textures/m.png");
+      expect(renderer.aoMap).toBe("Textures/ao.png");
+      expect(renderer.emissiveMap).toBe("Textures/e.png");
+      expect(renderer.emissive).toBe(0xff8800);
     });
 
     it("aggiorna i campi di un Light esistente", () => {

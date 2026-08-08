@@ -1,5 +1,6 @@
 import { createExternalStore } from "../store/editorStore.js";
-import { setTextureResolver } from "@engine/core";
+import { setTextureResolver, cachedTexturePaths, invalidateTexture } from "@engine/core";
+import { texturePathsAffectedByChange } from "../scene/textureInvalidation.js";
 
 /**
  * projectFolderClient.ts — Fase 10B: client HTTP per le route `/project/*`
@@ -100,6 +101,25 @@ export const viewedFolderStore = createExternalStore<string | null>(null);
  */
 export const projectChangeStore = createExternalStore<{ changedPaths: string[] } | null>(null);
 
+/**
+ * Fase 11B.2 — contatore incrementato ad ogni invalidazione di texture
+ * (vedi `ws.onmessage` sotto): la thumbnail 2D in Inspector.tsx (`<img
+ * src={projectFileUrl(...)}>`) è un percorso di rendering INDIPENDENTE dal
+ * materiale 3D del Viewport (vedi JSDoc di `projectFileUrl` sopra) — il
+ * browser mantiene la sua cache HTTP per quella URL a prescindere da
+ * `invalidateTexture` (core), che tocca solo la `THREE.Texture` in
+ * memoria. Senza questo contatore, dopo un'invalidazione il materiale 3D
+ * si aggiorna correttamente ma la thumbnail resta quella vecchia (bug
+ * scoperto in smoke-test): Inspector.tsx appende questo valore come
+ * cache-buster all'URL della thumbnail per forzare un ri-fetch quando
+ * cambia, indipendentemente da QUALE percorso sia stato invalidato — un
+ * ri-fetch di una piccola thumbnail non necessaria per invalidazioni non
+ * pertinenti è un costo accettabile, la semplicità di un contatore globale
+ * batte il costo di tracciare per-percorso quali thumbnail sono montate
+ * in questo momento.
+ */
+export const textureCacheVersionStore = createExternalStore<number>(0);
+
 const WATCH_RECONNECT_DELAY_MS = 3000;
 
 function watchWsUrl(): string {
@@ -125,6 +145,25 @@ function openWatchSocket(): void {
   ws.onmessage = (event) => {
     const message = JSON.parse(String(event.data)) as { kind: "changed"; changedPaths: string[] };
     projectChangeStore.set({ changedPaths: message.changedPaths });
+    // Fase 11B.2 (punto aperto 5, deferito da 11B.1) — oltre a far
+    // ricaricare l'albero (sopra), le stesse notifiche di cambiamento
+    // invalidano le texture già in cache la cui cartella-genitore è fra
+    // quelle segnalate: un MeshRenderer che le sta già mostrando
+    // (Albedo/Normal/Roughness/Metalness/AO/Emissive) si aggiorna in tempo
+    // reale, vedi `invalidateTexture`/`subscribeTextureUpdates` in
+    // AssetLoader.ts. Logica di corrispondenza cartella↔texture pura e
+    // testata a sé in `textureInvalidation.ts`.
+    const affectedPaths = texturePathsAffectedByChange(message.changedPaths, cachedTexturePaths());
+    for (const path of affectedPaths) {
+      invalidateTexture(path);
+    }
+    // Bump del contatore SOLO se almeno una texture è stata davvero
+    // invalidata sopra: evita un ri-fetch di ogni thumbnail montata per
+    // notifiche di cambiamento che non riguardano alcuna texture in cache
+    // (es. uno script o un modello modificato).
+    if (affectedPaths.length > 0) {
+      textureCacheVersionStore.set(textureCacheVersionStore.get() + 1);
+    }
   };
 
   ws.onclose = () => {

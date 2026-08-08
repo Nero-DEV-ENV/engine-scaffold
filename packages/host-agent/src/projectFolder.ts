@@ -205,17 +205,32 @@ export class ProjectFolderSession extends EventEmitter {
     });
 
     const onEntryEvent = (absolutePath: string): void => this.queueChangedPath(root, absolutePath);
-    // Solo add/unlink/addDir/unlinkDir: un "change" (contenuto di un file
-    // modificato, es. scene.json riscritto da un altro strumento) non
-    // altera l'elenco di una cartella — nessuna entry aggiunta/rimossa —
-    // quindi non serve invalidare/ripubblicare nulla per Fase 10E/10B.
-    // Punto confermato dall'utente: nessuna gestione speciale per
-    // scene.json cambiato dall'esterno in questa fase (Fase 10F resta
-    // così com'è).
+    // Fase 10G — solo add/unlink/addDir/unlinkDir in origine: un "change"
+    // (contenuto di un file modificato, es. scene.json riscritto da un
+    // altro strumento) non altera l'elenco di una cartella — nessuna
+    // entry aggiunta/rimossa — quindi non serviva invalidare/ripubblicare
+    // nulla per Fase 10E/10B con quello scope. Punto confermato
+    // dall'utente all'epoca: nessuna gestione speciale per scene.json
+    // cambiato dall'esterno in quella fase.
+    //
+    // Fase 11B.2 — "change" AGGIUNTO: l'invalidazione automatica delle
+    // texture (AssetLoader.invalidateTexture, agganciata a questo stesso
+    // canale via projectFolderClient.ts) dipende esattamente dal caso che
+    // Fase 10G escludeva di proposito — sovrascrivere un file ESISTENTE
+    // (stesso nome) con un nuovo contenuto è quasi sempre un "change", non
+    // un add/unlink. Bug scoperto in smoke-test: senza questo listener,
+    // l'invalidazione funzionava per puro caso solo se lo strumento
+    // esterno cancellava e ricreava il file (unlink+add) invece di
+    // sovrascriverlo in-place. Nessun danno per l'uso originale di Fase
+    // 10E/10B: un reload in più della lista cartella per un "change" che
+    // non altera l'elenco è innocuo (idempotente), la stessa
+    // deduplicazione per finestra di debounce già esistente si applica
+    // identica a questo evento.
     this.watcher.on("add", onEntryEvent);
     this.watcher.on("unlink", onEntryEvent);
     this.watcher.on("addDir", onEntryEvent);
     this.watcher.on("unlinkDir", onEntryEvent);
+    this.watcher.on("change", onEntryEvent);
   }
 
   /** Fase 10G — ferma il watcher corrente (se presente) e scarta qualunque cambiamento ancora in attesa di essere "flushato" — un cambiamento nella root appena chiusa non deve generare una notifica tardiva dopo la chiusura. */
@@ -368,6 +383,12 @@ export class ProjectFolderSession extends EventEmitter {
    * (`scene.json`), che esiste già in quanto la radice stessa è aperta;
    * creare sottocartelle mancanti in una fase futura che permettesse un
    * percorso scelto dall'utente è una decisione a parte, non presa qui.
+   *
+   * Fase 11B.2 — da quando il watcher ascolta anche "change" (vedi
+   * `startWatching()`), sovrascrivere `scene.json` qui genera ora ANCHE una
+   * notifica sul canale `/project/watch` (percorso della root, "."),
+   * innocua: solo un reload idempotente della lista root lato editor,
+   * nessun ciclo di salvataggio o comportamento diverso da prima.
    */
   async writeFile(relativePath: string, contents: string): Promise<boolean> {
     if (this.rootPath === null) return false;

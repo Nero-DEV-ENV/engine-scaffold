@@ -7,12 +7,14 @@ import {
   editorSceneHandleStore,
 } from "../store/editorStore.js";
 import { radToDeg, degToRad, roundForDisplay, parseNumericInput } from "./transformFields.js";
-import { Component, serializeComponent, RigidBodyType, DEFAULT_METALNESS, DEFAULT_ROUGHNESS, DEFAULT_TRANSPARENT, DEFAULT_OPACITY } from "@engine/core";
+import { Component, serializeComponent, RigidBodyType, DEFAULT_METALNESS, DEFAULT_ROUGHNESS, DEFAULT_TRANSPARENT, DEFAULT_OPACITY, DEFAULT_EMISSIVE } from "@engine/core";
 import type { ComponentData, ComponentTypeName, GameObject } from "@engine/core";
 import type { EditorSceneHandle } from "../scene/createEditorScene.js";
 import { PlusIcon, RemoveIcon, TextureIcon } from "../icons.js";
 import { projectFileUrl } from "../network/projectFolderClient.js";
-import { armedTextureSlotStore, armAlbedoMapSlot, disarmTextureSlot } from "../scene/textureAssignment.js";
+import { armedTextureSlotStore, armMaterialMapSlot, disarmTextureSlot } from "../scene/textureAssignment.js";
+import type { ArmedMaterialSlot } from "../scene/textureAssignment.js";
+import { textureCacheVersionStore } from "../network/projectFolderClient.js";
 
 /**
  * Fase 6D — un componente per l'Inspector: opzioni del menu "Aggiungi
@@ -102,36 +104,52 @@ function RangeField({
 }
 
 /**
- * AlbedoMapField — Fase 11B.1, controllo Inspector per la mappa Albedo di
- * un MeshRenderer. A differenza degli altri campi di questa fase, non è un
- * `<input>` diretto: l'assegnazione avviene con un doppio click su una
- * texture in ProjectTree.tsx/ProjectFolderGrid.tsx (punto aperto 1
- * confermato dall'utente), qui c'è solo il bottone che "arma" lo slot
- * (`armAlbedoMapSlot`, textureAssignment.ts) e la thumbnail del risultato.
+ * TextureMapField — Fase 11B.1 (come `AlbedoMapField`, solo per Albedo),
+ * generalizzato in Fase 11B.2 (punto aperto 1 confermato dall'utente) per
+ * servire tutte e 6 le mappe texture di un MeshRenderer: un bottone
+ * ripetuto per mappa (non un pannello griglia compatto — scelta esplicita
+ * per coerenza/semplicità, vedi punto 1) invece di 6 componenti quasi
+ * identici da mantenere sincronizzati a mano.
+ *
+ * Non è un `<input>` diretto: l'assegnazione avviene con un doppio click su
+ * una texture in ProjectTree.tsx/ProjectFolderGrid.tsx (punto aperto 1
+ * Fase 11B.1), qui c'è solo il bottone che "arma" lo slot indicato da
+ * `field` (`armMaterialMapSlot`, textureAssignment.ts) e la thumbnail del
+ * risultato.
  *
  * Thumbnail: `<img src={projectFileUrl(...)}>` diretto (CORS permissivo
  * confermato lato host-agent), non un `THREE.Texture`/canvas — riusa il
  * caricamento nativo del browser (stato di caricamento/errore già gestito
  * dal browser stesso, `onError` sotto copre solo il caso "percorso non
  * risolvibile" per mostrare il placeholder testuale). Lo stato di
- * caricamento/fallback della texture REALE nel Viewport (materiale
- * 3D) è gestito interamente in MeshRenderer._applyAlbedoMap (core), non
- * qui: le due "anteprime" (thumbnail 2D in Inspector, materiale 3D nel
+ * caricamento/fallback della texture REALE nel Viewport (materiale 3D) è
+ * gestito interamente in `TextureMapSlot`/`MeshRenderer` (core), non qui:
+ * le due "anteprime" (thumbnail 2D in Inspector, materiale 3D nel
  * Viewport) sono percorsi di rendering indipendenti, con lo stesso
  * concetto di fallback ma implementazioni proprie.
  */
-function AlbedoMapField({
+function TextureMapField({
   gameObjectId,
+  field,
+  label,
   value,
   onCommit,
 }: {
   gameObjectId: string;
+  field: ArmedMaterialSlot["field"];
+  label: string;
   value: string | undefined;
   onCommit: (next: string | undefined) => void;
 }): JSX.Element {
   const armedSlot = armedTextureSlotStore.useValue();
-  const isArmed = armedSlot?.gameObjectId === gameObjectId && armedSlot.field === "albedoMap";
+  const isArmed = armedSlot?.gameObjectId === gameObjectId && armedSlot.field === field;
   const [thumbBroken, setThumbBroken] = useState(false);
+  // Fase 11B.2 — cache-buster per invalidazione (scoperto in smoke-test):
+  // il materiale 3D nel Viewport si aggiorna da solo su invalidazione
+  // (vedi TextureMapSlot in MeshRenderer.ts), ma questa `<img>` è tenuta
+  // in cache dal browser per la stessa URL indipendentemente da quello —
+  // appendere questo valore forza un ri-fetch quando cambia.
+  const cacheVersion = textureCacheVersionStore.useValue();
   // Un `value` diverso (nuova assegnazione, o rimozione) merita un nuovo
   // tentativo di caricamento della thumbnail: senza questo reset, una
   // texture precedente rotta lascerebbe `thumbBroken` bloccato a `true`
@@ -142,11 +160,11 @@ function AlbedoMapField({
 
   return (
     <div className="inspector-texture-field">
-      <span className="inspector-field-label">Albedo</span>
+      <span className="inspector-field-label">{label}</span>
       <div className="inspector-texture-thumb-wrap">
         {value !== undefined && !thumbBroken ? (
           <img
-            src={projectFileUrl(value)}
+            src={`${projectFileUrl(value)}&v=${cacheVersion}`}
             alt=""
             className="inspector-texture-thumb"
             onError={() => setThumbBroken(true)}
@@ -163,7 +181,7 @@ function AlbedoMapField({
       <button
         type="button"
         className={`inspector-texture-choose-button${isArmed ? " inspector-texture-choose-button-armed" : ""}`}
-        onClick={() => armAlbedoMapSlot(gameObjectId)}
+        onClick={() => armMaterialMapSlot(gameObjectId, field)}
       >
         {isArmed ? "In attesa di doppio click…" : "Scegli texture…"}
       </button>
@@ -172,7 +190,7 @@ function AlbedoMapField({
           type="button"
           className="inspector-delete-button"
           onClick={() => onCommit(undefined)}
-          aria-label="Rimuovi mappa Albedo"
+          aria-label={`Rimuovi mappa ${label}`}
           title="Rimuovi"
         >
           <RemoveIcon />
@@ -568,16 +586,20 @@ function ComponentFields({
       // esterna dentro una function annidata come `commitAlbedoMap` sotto.
       const meshRendererData = data;
       // Fase 11B.1 — rimozione (next === undefined) deve OMETTERE la
-      // chiave `albedoMap`, non assegnarla esplicitamente a `undefined`:
+      // chiave della mappa, non assegnarla esplicitamente a `undefined`:
       // stesso vincolo di `exactOptionalPropertyTypes: true` già gestito in
       // SceneSerializer.ts (serializeComponent) per lo stesso campo.
-      function commitAlbedoMap(next: string | undefined): void {
+      // Fase 11B.2 — generalizzata da `commitAlbedoMap` (solo Albedo) per
+      // servire tutte e 6 le mappe con un'unica funzione parametrizzata su
+      // `field`, stesso principio di generalizzazione di `TextureMapField`
+      // sopra (punto aperto 1/4 confermati dall'utente).
+      function commitTextureMap(field: ArmedMaterialSlot["field"], next: string | undefined): void {
         if (next === undefined) {
-          const withoutAlbedoMap = { ...meshRendererData };
-          delete withoutAlbedoMap.albedoMap;
-          onCommit(withoutAlbedoMap);
+          const withoutField = { ...meshRendererData };
+          delete withoutField[field];
+          onCommit(withoutField);
         } else {
-          onCommit({ ...meshRendererData, albedoMap: next });
+          onCommit({ ...meshRendererData, [field]: next });
         }
       }
       return (
@@ -610,7 +632,13 @@ function ComponentFields({
             value={data.roughness ?? DEFAULT_ROUGHNESS}
             onCommit={(next) => onCommit({ ...data, roughness: next })}
           />
-          <AlbedoMapField gameObjectId={gameObjectId} value={data.albedoMap} onCommit={commitAlbedoMap} />
+          <TextureMapField
+            gameObjectId={gameObjectId}
+            field="albedoMap"
+            label="Albedo"
+            value={data.albedoMap}
+            onCommit={(next) => commitTextureMap("albedoMap", next)}
+          />
           {/* Fase 11B.1 (addendum) — data.transparent opzionale nel tipo,
               stesso motivo di metalness/roughness sopra: `??` serve solo a
               soddisfare il tipo, in pratica non è mai undefined a runtime. */}
@@ -624,6 +652,56 @@ function ComponentFields({
             value={data.opacity ?? DEFAULT_OPACITY}
             onCommit={(next) => onCommit({ ...data, opacity: next })}
           />
+          {/* Fase 11B.2 — le 5 mappe nuove, stesso pattern di Albedo sopra.
+              Nessun reset di `color` per nessuna di queste (a differenza di
+              albedoMap): vedi commento in textureAssignment.ts. */}
+          <TextureMapField
+            gameObjectId={gameObjectId}
+            field="normalMap"
+            label="Normal"
+            value={data.normalMap}
+            onCommit={(next) => commitTextureMap("normalMap", next)}
+          />
+          <TextureMapField
+            gameObjectId={gameObjectId}
+            field="roughnessMap"
+            label="Roughness Map"
+            value={data.roughnessMap}
+            onCommit={(next) => commitTextureMap("roughnessMap", next)}
+          />
+          <TextureMapField
+            gameObjectId={gameObjectId}
+            field="metalnessMap"
+            label="Metalness Map"
+            value={data.metalnessMap}
+            onCommit={(next) => commitTextureMap("metalnessMap", next)}
+          />
+          <TextureMapField
+            gameObjectId={gameObjectId}
+            field="aoMap"
+            label="AO"
+            value={data.aoMap}
+            onCommit={(next) => commitTextureMap("aoMap", next)}
+          />
+          <TextureMapField
+            gameObjectId={gameObjectId}
+            field="emissiveMap"
+            label="Emissive Map"
+            value={data.emissiveMap}
+            onCommit={(next) => commitTextureMap("emissiveMap", next)}
+          />
+          {/* Fase 11B.2 — colore emissivo scalare, stesso pattern di `Color`
+              sopra. data.emissive opzionale nel tipo per lo stesso motivo di
+              metalness/roughness (retrocompatibilità), `??` idem. */}
+          <label className="inspector-field">
+            <span className="inspector-field-label">Emissive</span>
+            <input
+              type="color"
+              value={colorNumberToHex(data.emissive ?? DEFAULT_EMISSIVE)}
+              onChange={(event) => onCommit({ ...data, emissive: hexToColorNumber(event.target.value) })}
+              className="inspector-color-input"
+            />
+          </label>
         </>
       );
     }
